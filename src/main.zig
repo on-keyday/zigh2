@@ -17,13 +17,14 @@ pub fn main() !void {
    defer hdr.deinit();
    for(0..1) |_| {
       try hpack.addHeader(alloc, &hdr, "x-test", "test");
-      //try hpack.addHeader(alloc, &hdr, "content-type", "text/html");
-      //try hpack.addHeader(alloc, &hdr, "content-length", "0");
-      //try hpack.addHeader(alloc, &hdr, "date", "Mon, 21 Oct 2013 20:13:21 GMT");
+      try hpack.addHeader(alloc, &hdr, "content-type", "text/html");
+      try hpack.addHeader(alloc, &hdr, "content-length", "0");
+      try hpack.addHeader(alloc, &hdr, "date", "Mon, 21 Oct 2013 20:13:21 GMT");
    }
    var encoder_table = hpack.Table.init(alloc,hpack.DEFAULT_TABLE_SIZE);
    defer encoder_table.deinit();
-   try framer.encodeHeaders(alloc, s.writer().any(),1,hdr,&encoder_table,null,null);
+   try framer.encodeHeaders(alloc, s.writer().any(),1,false,hdr,&encoder_table,null,null);
+   try framer.encodeData(s.writer().any(),1,"Hello World from Zig!",true,null);
    s.reset();
    var decoder_table = hpack.Table.init(alloc,hpack.DEFAULT_TABLE_SIZE);
    defer decoder_table.deinit();

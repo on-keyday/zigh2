@@ -99,7 +99,7 @@ fn encodeHeader(self :Self, enc :std.io.AnyWriter, id :ID,typ :H2FrameType,flags
 }
 
 //https://www.rfc-editor.org/rfc/rfc9113.html#name-data
-pub fn encodeData(self :Self,enc :std.io.AnyWriter,id :ID,data :[]u8, endOfStream :bool, padding:?u8) !void {
+pub fn encodeData(self :Self,enc :std.io.AnyWriter,id :ID,data :[]const u8, endOfStream :bool, padding:?u8) !void {
     var flags = Flags.init();
     if (endOfStream) {
         flags.set_end_stream();
@@ -108,12 +108,12 @@ pub fn encodeData(self :Self,enc :std.io.AnyWriter,id :ID,data :[]u8, endOfStrea
         flags.set_padded();
         try self.encodeHeader(enc,id,H2FrameType.DATA,flags,data.len + 1 + pad);
         try enc.writeByte(pad);
-        try enc.write(data);
+        try enc.writeAll(data);
         try enc.writeByteNTimes(0, pad);
     }
     else {
-        try encodeHeader(enc,id,H2FrameType.DATA,flags,data.len);
-        try enc.write(data);
+        try self.encodeHeader(enc,id,H2FrameType.DATA,flags,data.len);
+        try enc.writeAll(data);
     }
 }
 
@@ -137,7 +137,7 @@ pub const Priority = struct {
 
 
 // https://www.rfc-editor.org/rfc/rfc9113.html#name-headers
-pub fn encodeHeaders(self :Self, alloc :std.mem.Allocator, enc :std.io.AnyWriter,id :ID,header :hpack.Header,table :*hpack.Table,padding :?u8, priority :?Priority) !void  {
+pub fn encodeHeaders(self :Self, alloc :std.mem.Allocator, enc :std.io.AnyWriter,id :ID,endOfStream :bool,header :hpack.Header,table :*hpack.Table,padding :?u8, priority :?Priority) !void  {
     const DynamicWriter = std.fifo.LinearFifo(u8,.Dynamic);
     var hpackCompressed :DynamicWriter = DynamicWriter.init(alloc);
     defer hpackCompressed.deinit();
@@ -146,6 +146,9 @@ pub fn encodeHeaders(self :Self, alloc :std.mem.Allocator, enc :std.io.AnyWriter
     var flags = Flags.init();
     const optional_fields_len :usize= (if (padding) |p| 1 + p else 0) + (if (priority) |_| @as(usize,5) else 0);
     var len :usize = slice.len + optional_fields_len;
+    if(endOfStream) {
+        flags.set_end_stream();
+    }
     if(padding) |_| {
         flags.set_padded();
     }
