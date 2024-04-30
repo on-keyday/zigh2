@@ -18,10 +18,10 @@ pub const HuffmanTree = struct {
     const flag_value = 0x80000000;
     //static constexpr std::uint32_t mask_shift = 15;
     const mask_shift = 15;
-    fn one(self :Self) u16 {
+    pub fn one(self :Self) u16 {
         return @intCast(self.data & mask_one >> mask_shift);
     }
-    fn zero(self :Self) u16 {
+    pub fn zero(self :Self) u16 {
         return @intCast(self.data & mask_zero);
     }
     fn is_not_set(self :Self) bool {
@@ -36,11 +36,11 @@ pub const HuffmanTree = struct {
     fn set_value(self :Self, v :u32) !void {
         self.data = v | flag_value;  
     }
-    fn has_value(self :Self) bool {
+    pub fn has_value(self :Self) bool {
         return self.data & flag_value != 0;
     }
-    fn get_value(self :Self) u32 {
-        return self.data & !flag_value;
+    pub fn get_value(self :Self) u32 {
+        return self.data & ~@as(u32,flag_value);
     }
 };
 
@@ -50,7 +50,7 @@ pub fn getRoot() HuffmanTree {
 
 const OutOfRange = error{};
 
-pub fn get_next(tree :HuffmanTree, bit :u1) OutOfRange!HuffmanTree {
+pub fn get_next(tree :HuffmanTree, bit :u1) !HuffmanTree {
     if (tree.has_value()) {
         return error.OutOfRange;
     }
@@ -60,21 +60,21 @@ pub fn get_next(tree :HuffmanTree, bit :u1) OutOfRange!HuffmanTree {
     } else {
         n = tree.one();
     }
-    if ( (n == 0) || (n >= raw_table.len)) {
+    if ( (n == 0) or (n >= raw_table.len)) {
         return error.OutOfRange;
     } 
     return HuffmanTree{ .data = raw_table[n] };
 }
 
-pub const BitWriter = std.io.BitWriter(.Little, std.io.AnyWriter);
-pub const BitReader = std.io.BitReader(.Little, std.io.AnyReader);
+pub const BitWriter = std.io.BitWriter(.little, std.io.AnyWriter);
+pub const BitReader = std.io.BitReader(.little, std.io.AnyReader);
 
 pub const Code = struct {
     literal :u16,
-    bits :u8,
+    bits :u5,
     code :u32,
 
-    fn write(self :Code,w :BitWriter) anyerror!void{
+    pub fn write(self :Code,w :*BitWriter) anyerror!void{
         //auto b = std::uint64_t(1) << (bits - 1);
         //for (auto i = 0; i < bits; i++) {
         //    out.push_back(code & b ? t : f);
@@ -84,13 +84,13 @@ pub const Code = struct {
         //    b >>= 1;
         //}
         //return true;
-        var b :u32 = 1 << (self.bits - 1);
-        var i = 0;
+        var b :u32 = @as(u32,1) << (self.bits - 1);
+        var i :u5 = 0;
         while (i < self.bits) {
             if (self.code & b != 0) {
-                w.write(1);
+                try w.writeBits(@as(u1,1),1);
             } else {
-                w.write(0);
+                try w.writeBits(@as(u1,0),1);
             }
             if (b == 1) {
                 break;

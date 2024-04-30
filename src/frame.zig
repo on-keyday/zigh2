@@ -1,6 +1,4 @@
-
 const std = @import("std");
-
 const H2FrameType = enum {
     DATA,
     HEADDER,
@@ -38,10 +36,3 @@ fn decode(enc :std.io.AnyReader) anyerror!FrameHeader {
     return hdr;
 }
 
-fn hpackHuffman() {
-
-}
-
-fn main() void {
-    
-}
