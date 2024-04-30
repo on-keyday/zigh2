@@ -31,34 +31,29 @@ pub fn is_priority(f:Self)  bool {
     return f.value & PRIORITY != 0;
 }
 
-pub fn set_none(f:Self)  Self {
+pub fn set_none(f:*Self)  void {
     f.value = NONE;
     return f;
 }
 
-pub fn set_ack(f:Self)  Self {
+pub fn set_ack(f:*Self) void {
     f.value |= ACK;
-    return f;
 }
 
-pub fn set_end_stream(f:Self)  Self {
+pub fn set_end_stream(f:*Self)  void {
     f.value |= END_STREAM;
-    return f;
 }
 
-pub fn set_padded(f:Self)  Self {
+pub fn set_padded(f:*Self)  void {
     f.value |= PADDED;
-    return f;
 }
 
-pub fn set_end_headers(f:Self)  Self {
+pub fn set_end_headers(f:*Self)  void {
     f.value |= END_HEADERS;
-    return f;
 }
 
-pub fn set_priority(f:Self)  Self {
+pub fn set_priority(f:*Self)  void {
     f.value |= PRIORITY;
-    return f;
 }
 
 pub fn init()  Self {

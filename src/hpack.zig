@@ -111,6 +111,7 @@ pub const U8Array = std.ArrayList(u8);
 fn decodeHuffmanString(alloc :std.mem.Allocator, r :std.io.AnyReader) anyerror!U8Array {
     var bitReader = huffman.BitReader.init(r);
     var result = U8Array.init(alloc);
+    errdefer result.deinit();
     while(true) {
         var allone :u32 = 1;
         const node = decodeSingleChar(&bitReader, &allone);
@@ -137,9 +138,13 @@ pub fn u8ArrayFromStr(alloc :std.mem.Allocator, str :[]const u8) !U8Array {
 
 fn decodeStringWithLenPrefix(alloc :std.mem.Allocator,r :std.io.AnyReader,len :u64,prefix :u8) anyerror!U8Array {
     var str = U8Array.init(alloc);
+    var deinited = false;
+    errdefer if(!deinited) str.deinit();
     try str.resize(len);
     try r.readNoEof(str.items);
     if(prefix & 0x80 != 0) {
+        deinited = true;
+        defer str.deinit();
         var s = std.io.fixedBufferStream(str.items);
         const r2 = s.reader().any();
         return decodeHuffmanString(alloc, r2);
@@ -350,15 +355,17 @@ const StrHasher = struct {
 };
 
 pub fn addHeader(alloc :std.mem.Allocator, hdr :*Header, key :[]const u8,values :[]const u8) !void  {
-    const key_array = try u8ArrayFromStr(hdr.allocator,key);
-    const hdr_entry = try hdr.getOrPut(key_array);
+    const key_array = try u8ArrayFromStr(alloc,key);
+    const hdr_entry = try hdr.header.getOrPut(key_array);
     if(!hdr_entry.found_existing) {
         hdr_entry.value_ptr.* = SameKey.init(alloc);
     }
     else {
         key_array.deinit();
     }
-    try hdr_entry.value_ptr.*.append(try u8ArrayFromStr(hdr.allocator,values));
+    const val = try u8ArrayFromStr(alloc,values);
+    errdefer val.deinit();
+    try hdr_entry.value_ptr.append(val);
 }
 
 pub fn equalHeader(hdr1 :Header,hdr2 :Header) bool {
@@ -389,7 +396,31 @@ pub fn equalHeader(hdr1 :Header,hdr2 :Header) bool {
 }
 
 pub const SameKey = std.ArrayList(U8Array);
-pub const Header = std.ArrayHashMap(U8Array,SameKey,StrHasher,true);
+pub const Header = struct {
+    const Map = std.ArrayHashMap(U8Array,SameKey,StrHasher,true);
+    header :Map,
+
+    pub fn init(alloc :std.mem.Allocator) Header {
+        return Header{.header = Map.init(alloc)};
+    }
+
+    pub fn deinit(self :*Header) void {
+        for(self.header.keys()) |x| {
+            x.deinit();
+        }
+        for(self.header.values()) |x| {
+            for(x.items) |y| {
+                y.deinit();
+            }
+            x.deinit();
+        }
+        self.header.deinit();
+    }
+
+    fn getOrPut(self :*Header,key :U8Array) !Map.GetOrPutResult {
+        return self.header.getOrPut(key);
+    }
+};
 
 const AllocatedKeyValue = struct {
     key :U8Array,
@@ -397,10 +428,27 @@ const AllocatedKeyValue = struct {
 };
 
 const FIFO = std.fifo.LinearFifo(AllocatedKeyValue,.Dynamic);
+
+pub const DEFAULT_TABLE_SIZE = 4096;
+
 pub const Table = struct {
     entries :FIFO,
     max_size :u64,
     size :u64,
+
+    pub fn init(alloc :std.mem.Allocator,max_size :u64) Table {
+        return Table{.entries = FIFO.init(alloc),.max_size = max_size,.size = 0};
+    }
+
+    pub fn update_max_size(self :*Table,max_size :u64) void {
+        self.max_size = max_size;
+        while(self.size > self.max_size) {
+            const removed = if (self.entries.readItem()) |x| x else @panic("Table is empty but size is greater than max_size");
+            self.size -= removed.key.items.len + removed.value.items.len;
+            removed.key.deinit();
+            removed.value.deinit();
+        }
+    }
 
     pub fn insert(self :*Table, alloc :std.mem.Allocator,key :[]const u8,value :[]const u8) !void {
         if(self.size + key.len + value.len > self.max_size) {
@@ -426,31 +474,44 @@ pub const Table = struct {
         try self.entries.writeItem(entry);
         self.size += key.len + value.len;
     }
+
+    pub fn deinit(self :*Table) void {
+        while(self.entries.readItem()) |x| {
+            x.key.deinit();
+            x.value.deinit();
+        }
+        self.entries.deinit();
+    }
 };
 
-fn appendHeaderDynamic(alloc :std.mem.Allocator,hdr :*Header,key :U8Array,value :U8Array) !void {
+fn addHeaderDynamic(alloc :std.mem.Allocator,hdr :*Header,key :U8Array,value :U8Array) !void {
+    var deinited = false;
+    errdefer if (!deinited) key.deinit();
+    errdefer value.deinit();
     const hdr_entry = try hdr.getOrPut(key);
     if(!hdr_entry.found_existing) {
         hdr_entry.value_ptr.* = SameKey.init(alloc);
     }
     else {
         key.deinit();
+        deinited = true;
     }
-    try hdr_entry.value_ptr.*.append(value);
+    try hdr_entry.value_ptr.append(value);
 }
 
 
-fn appendHeader(alloc :std.mem.Allocator, hdr :*Header,key :[]const u8,value :[]const u8) !void {
-    const key_array = try u8ArrayFromStr(hdr.allocator,key);
-    const hdr_entry = try hdr.getOrPut(key_array);
-    if(!hdr_entry.found_existing) {
-        hdr_entry.value_ptr.* = SameKey.init(alloc);
-    }
-    else {
-        key_array.deinit();
-    }
-    try hdr_entry.value_ptr.*.append(try u8ArrayFromStr(hdr.allocator,value));
-}
+//fn appendHeader(alloc :std.mem.Allocator, hdr :*Header,key :[]const u8,value :[]const u8) !void {
+//    const key_array = try u8ArrayFromStr(alloc,key);
+//    const hdr_entry = try hdr.getOrPut(key_array);
+//    if(!hdr_entry.found_existing) {
+//        hdr_entry.value_ptr.* = SameKey.init(alloc);
+//    }
+//    else {
+//        key_array.deinit();
+//    }
+//    try hdr_entry.value_ptr.*.append(try u8ArrayFromStr(hdr.allocator,value));
+//}
+
 
 fn lookupTableIndex(index :u64,table :?*Table) !KeyValEntry {
     if(index < predefinedHeaders.len) {
@@ -473,7 +534,7 @@ pub fn decodeField(alloc :std.mem.Allocator,header :*Header, table :?*Table, r :
        FieldType.index => {
             const index  =  try decodeIntegerWithFirstByte(r, 7, b,null);
             const entry = try lookupTableIndex(index,table);
-            try appendHeader(alloc,header,entry.keyvalue.key,entry.keyvalue.value);
+            try addHeader(alloc,header,entry.keyvalue.key,entry.keyvalue.value);
         },
         FieldType.index_literal_insert => {
             const index  =  try decodeIntegerWithFirstByte(r, 6, b,null);
@@ -494,7 +555,7 @@ pub fn decodeField(alloc :std.mem.Allocator,header :*Header, table :?*Table, r :
             else {
                 return error.DynamicTableNotSupported;
             }
-            try appendHeaderDynamic(alloc,header,key,value);
+            try addHeaderDynamic(alloc,header,key,value);
             
         },
         FieldType.index_literal_no_insert , FieldType.index_literal_never_indexed => {
@@ -503,14 +564,16 @@ pub fn decodeField(alloc :std.mem.Allocator,header :*Header, table :?*Table, r :
             var value :U8Array = undefined;
             if(index == 0) {
                 key = try decodeString(alloc,r);
+                errdefer key.deinit();
                 value = try decodeString(alloc,r);
             }
             else {
                 const entry = try lookupTableIndex(index,table);
                 key = try u8ArrayFromStr(alloc,entry.keyvalue.key);
+                errdefer key.deinit();
                 value = try decodeString(alloc,r);
             }
-            try appendHeaderDynamic(alloc,header, key,value); 
+            try addHeaderDynamic(alloc,header, key,value); 
         },
         FieldType.dyn_table_update => {
             return error.OutOfRange; // currently not supported
@@ -579,7 +642,7 @@ pub fn encodeField(alloc :std.mem.Allocator, w :std.io.AnyWriter,entry :KeyValue
 }
 
 pub fn encodeHeader(alloc :std.mem.Allocator,w :std.io.AnyWriter,header :Header,table :?*Table,shouldAdd :anytype) !void {
-    var iter = header.iterator();
+    var iter = header.header.iterator();
     while(iter.next()) |entry| {
         const value_iter = entry.value_ptr.*.items;
         for(value_iter) |v| {
