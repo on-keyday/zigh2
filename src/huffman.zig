@@ -48,7 +48,6 @@ pub fn getRoot() HuffmanTree {
     return HuffmanTree{ .data = raw_table[0] };
 }
 
-const OutOfRange = error{};
 
 pub fn get_next(tree :HuffmanTree, bit :u1) !HuffmanTree {
     if (tree.has_value()) {
