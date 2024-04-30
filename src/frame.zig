@@ -1,8 +1,8 @@
 const std = @import("std");
 const hpack = @import("hpack.zig");
-const H2FrameType = enum(u8) {
+pub const H2FrameType = enum(u8) {
     DATA,
-    HEADDER,
+    HEADERS,
     PRIORITY,
     RST_STREAM,
     SETTINGS,
@@ -46,7 +46,7 @@ fn encodeFrameHeader(frame :FrameHeader,enc :std.io.AnyWriter) anyerror!void{
 fn intToType(t :u8) ?H2FrameType {
     switch(t) {
         0 => return H2FrameType.DATA,
-        1 => return H2FrameType.HEADDER,
+        1 => return H2FrameType.HEADERS,
         2 => return H2FrameType.PRIORITY,
         3 => return H2FrameType.RST_STREAM,
         4 => return H2FrameType.SETTINGS,
@@ -161,7 +161,7 @@ pub fn encodeHeaders(self :Self, alloc :std.mem.Allocator, enc :std.io.AnyWriter
     else {
         flags.set_end_headers();
     }
-    try self.encodeHeader(enc,id,H2FrameType.HEADDER,flags,len);
+    try self.encodeHeader(enc,id,H2FrameType.HEADERS,flags,len);
     if(padding) |p| {
         try enc.writeByte(p);
         len -= 1 + p;
@@ -325,7 +325,7 @@ fn typeIDCheck(comptime typ :H2FrameType,header :FrameHeader,opt :anytype) !void
                 return error.InvalidStreamID0;
             }
         },
-        H2FrameType.HEADDER => {
+        H2FrameType.HEADERS => {
             if(header.stream_id == CONNECTION) {
                 return error.InvalidStreamID0;
             }
@@ -391,7 +391,7 @@ fn decodeData(alloc :std.mem.Allocator, r :std.io.AnyReader,frame :*Frame)  !voi
 }
 
 fn decodeHeaders(self :Self,table :*hpack.Table, alloc :std.mem.Allocator, r :std.io.AnyReader,frame :*Frame) !void {
-    try typeIDCheck(H2FrameType.HEADDER,frame.header,null);
+    try typeIDCheck(H2FrameType.HEADERS,frame.header,null);
     var len = frame.*.header.length;
     frame.payload = .{.headers = undefined};
     try mayReadPadLen(&frame.payload.headers.padding,&len,r,frame);
@@ -451,7 +451,7 @@ pub fn decodeFrames(self :Self, alloc :std.mem.Allocator, r :std.io.AnyReader,ta
             H2FrameType.DATA => {
                 try decodeData(alloc,r,&frame);
             },
-            H2FrameType.HEADDER => {
+            H2FrameType.HEADERS => {
                 try self.decodeHeaders(table,alloc,r,&frame);
             },
             H2FrameType.CONTINUATION => {

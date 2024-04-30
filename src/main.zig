@@ -31,7 +31,16 @@ pub fn main() !void {
    defer decoder_table.deinit();
    var d = try framer.decodeFrames(alloc,s.reader().any(),&decoder_table);
    defer d.deinit();
+   std.testing.expectEqual(d.header.stream_id,1);
+   std.testing.expectEqual(d.header.typ.typ,frame.H2FrameType.SETTINGS);
+   std.testing.expectEqual(d.header.flags,0);
+   std.testing.expectEqual(d.header.length,6);   
    var h = try framer.decodeFrames(alloc,s.reader().any(),&decoder_table);
    defer h.deinit();
-   
+   std.testing.expectEqual(h.header.stream_id,1);
+   std.testing.expectEqual(h.header.typ.typ,frame.H2FrameType.HEADERS);
+   var b = try framer.decodeFrames(alloc,s.reader().any(),&decoder_table);
+   defer b.deinit();
+   var g = try framer.decodeFrames(alloc,s.reader().any(),&decoder_table);
+   defer g.deinit();   
 }
