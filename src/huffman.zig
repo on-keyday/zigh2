@@ -19,7 +19,7 @@ pub const HuffmanTree = struct {
     //static constexpr std::uint32_t mask_shift = 15;
     const mask_shift = 15;
     pub fn one(self :Self) u16 {
-        return @intCast(self.data & mask_one >> mask_shift);
+        return @intCast((self.data & mask_one) >> mask_shift);
     }
     pub fn zero(self :Self) u16 {
         return @intCast(self.data & mask_zero);
@@ -40,7 +40,7 @@ pub const HuffmanTree = struct {
         return self.data & flag_value != 0;
     }
     pub fn get_value(self :Self) u32 {
-        return self.data & ~@as(u32,flag_value);
+        return self.data & 0x7fffffff;
     }
 };
 
@@ -66,8 +66,8 @@ pub fn get_next(tree :HuffmanTree, bit :u1) !HuffmanTree {
     return HuffmanTree{ .data = raw_table[n] };
 }
 
-pub const BitWriter = std.io.BitWriter(.little, std.io.AnyWriter);
-pub const BitReader = std.io.BitReader(.little, std.io.AnyReader);
+pub const BitWriter = std.io.BitWriter(.big, std.io.AnyWriter);
+pub const BitReader = std.io.BitReader(.big, std.io.AnyReader);
 
 pub const Code = struct {
     literal :u16,

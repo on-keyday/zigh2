@@ -82,7 +82,7 @@ fn encodeString(w :std.io.AnyWriter,comptime prefix :u8,str :[]const u8) anyerro
         for (str) |c| {
             try huffman.codes[c].write(&bitWriter);
         }
-        while (bitWriter.bit_count % 8 != 0) {
+        while (bitWriter.bit_count != 0) {
             try bitWriter.writeBits(@as(u1,1),1);
         }
     }
@@ -95,7 +95,12 @@ fn decodeSingleChar(r :*huffman.BitReader,allone :*u32) anyerror!huffman.Huffman
         if(node.has_value()) {
             return node;
         }
-        const bit = try r.readBitsNoEof(u1,1);
+        const bit = if(r.readBitsNoEof(u1,1)) |x| x else |x| {
+            if(x == error.EndOfStream and  node.data == huffman.getRoot().data) {
+                return error.HpackHuffmanFinished;
+            }
+            return x;
+        };
         allone.* = if ((allone.* != 0) and (bit != 0)) allone.* + 1 else 0;
         node = try huffman.get_next(node, bit);
     }
@@ -107,7 +112,7 @@ fn decodeHuffmanString(alloc :std.mem.Allocator, r :std.io.AnyReader) anyerror!U
     var bitReader = huffman.BitReader.init(r);
     var result = U8Array.init(alloc);
     while(true) {
-        var allone :u32 = 0;
+        var allone :u32 = 1;
         const node = decodeSingleChar(&bitReader, &allone);
         if(node) |n| {
             if(n.get_value() == 256) {
@@ -115,7 +120,7 @@ fn decodeHuffmanString(alloc :std.mem.Allocator, r :std.io.AnyReader) anyerror!U
             }
             try result.append(@intCast( n.get_value()));
         } else |x| {
-            if((x == error.EndOfStream) and (allone - 1 <= 7)) {
+            if(x == error.HpackHuffmanFinished or (x == error.EndOfStream) and (allone != 0 and allone - 1 <= 7)) {
                 break;
             }
             return x;
@@ -277,9 +282,9 @@ fn equalKey(key1 :[]const u8,key2 :[]const u8) bool {
     return true;
 }
 
-fn getTableEntry(key :[]const u8, value :[]const u8,hdr_equal :bool) ?KeyValEntry {
+fn getTableEntry(key :[]const u8, value :[]const u8,only_hdr_equal :bool) ?KeyValEntry {
     for(predefinedHeaders,0..) |entry,i| {
-        if(hdr_equal) {
+        if(!only_hdr_equal) {
             if(equalKey(key, entry.key) and equalKey(value, entry.value)) {
                 return KeyValEntry{.keyvalue = entry, .index = i};
             }
