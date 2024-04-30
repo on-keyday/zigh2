@@ -25,6 +25,7 @@ pub fn main() !void {
    defer encoder_table.deinit();
    try framer.encodeHeaders(alloc, s.writer().any(),1,false,hdr,&encoder_table,null,null);
    try framer.encodeData(s.writer().any(),1,"Hello World from Zig!",true,null);
+   try framer.encodeGoaway(s.writer().any(),1,0,null);
    s.reset();
    var decoder_table = hpack.Table.init(alloc,hpack.DEFAULT_TABLE_SIZE);
    defer decoder_table.deinit();

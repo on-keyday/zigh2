@@ -211,12 +211,12 @@ pub fn encodeSettings(self: Self,enc :std.io.AnyWriter,ack :bool, definedSetting
     }
 }
 
-pub fn encodeGoaway(self :Self,enc :std.io.AnyWriter,last_stream_id :ID,error_code :u32,debug_data :?[]u8) !void {
-    const len = 8 + if(debug_data) debug_data.len else 0;
-    try self.encodeHeader(enc,CONNECTION,H2FrameType.GOAWAY,Flags.is_none(),len);
-    try enc.writeInt(u32, @as(u32,last_stream_id),.Big);
-    try enc.writeInt(u32, error_code,.Big);
-    try enc.write(debug_data);
+pub fn encodeGoaway(self :Self,enc :std.io.AnyWriter,last_stream_id :ID,error_code :u32,debug_data :?[]const u8) !void {
+    const len = 8 + if(debug_data) |d| d.len else 0;
+    try self.encodeHeader(enc,CONNECTION,H2FrameType.GOAWAY,Flags.init(),len);
+    try enc.writeInt(u32, @as(u32,last_stream_id),.big);
+    try enc.writeInt(u32, error_code,.big);
+    if(debug_data) |d| try enc.writeAll(d);
 }
 
 
