@@ -2,6 +2,13 @@
 const std = @import("std");
 const huffman = @import("huffman.zig");
 
+const HpackError = huffman.HuffmanError || error {
+    TableOutOfRange,
+    DynamicTableNotSupported,
+    HpackHuffmanFinished,
+    IntegerOverflow,
+};
+
 fn huffmanLength(str :[]const u8) usize {
     var len :usize= 0;
     for (str) |c| {
@@ -52,7 +59,7 @@ pub fn decodeIntegerWithFirstByte(r :std.io.AnyReader,comptime prefix_len :u32, 
     var shift :u7= 0;
     while(true) {
         if (shift >= 64) {
-            return error.OutOfRange;
+            return HpackError.IntegerOverflow;
         }
         b = try r.readByte();
         const s :u6 = @intCast(shift);
@@ -97,7 +104,7 @@ fn decodeSingleChar(r :*huffman.BitReader,allone :*u32) anyerror!huffman.Huffman
         }
         const bit = if(r.readBitsNoEof(u1,1)) |x| x else |x| {
             if(x == error.EndOfStream and  node.data == huffman.getRoot().data) {
-                return error.HpackHuffmanFinished;
+                return HpackError.HpackHuffmanFinished;
             }
             return x;
         };
@@ -117,11 +124,11 @@ fn decodeHuffmanString(alloc :std.mem.Allocator, r :std.io.AnyReader) anyerror!U
         const node = decodeSingleChar(&bitReader, &allone);
         if(node) |n| {
             if(n.get_value() == 256) {
-                return error.OutOfRange;
+                return huffman.HuffmanError.OutOfRange;
             }
             try result.append(@intCast( n.get_value()));
         } else |x| {
-            if(x == error.HpackHuffmanFinished or (x == error.EndOfStream) and (allone != 0 and allone - 1 <= 7)) {
+            if(x == HpackError.HpackHuffmanFinished or (x == error.EndOfStream) and (allone != 0 and allone - 1 <= 7)) {
                 break;
             }
             return x;
@@ -525,7 +532,7 @@ fn lookupTableIndex(index :u64,table :?*Table) !KeyValEntry {
         }
     
     }
-    return error.TableOutOfRange;
+    return HpackError.TableOutOfRange;
 }
 
 pub fn decodeField(alloc :std.mem.Allocator,header :*Header, table :?*Table, r :std.io.AnyReader,first_byte :u8) !void  {
@@ -553,7 +560,7 @@ pub fn decodeField(alloc :std.mem.Allocator,header :*Header, table :?*Table, r :
                 try t.insert(alloc,key.items,value.items);
             } 
             else {
-                return error.DynamicTableNotSupported;
+                return HpackError.DynamicTableNotSupported;
             }
             try addHeaderDynamic(alloc,header,key,value);
             
@@ -576,10 +583,10 @@ pub fn decodeField(alloc :std.mem.Allocator,header :*Header, table :?*Table, r :
             try addHeaderDynamic(alloc,header, key,value); 
         },
         FieldType.dyn_table_update => {
-            return error.OutOfRange; // currently not supported
+            return HpackError.DynamicTableNotSupported; // currently not supported
         },
         FieldType.undefined => {
-            return error.OutOfRange;
+            return HpackError.OutOfRange;
         },
     }
 }

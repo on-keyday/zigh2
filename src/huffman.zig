@@ -48,10 +48,13 @@ pub fn getRoot() HuffmanTree {
     return HuffmanTree{ .data = raw_table[0] };
 }
 
+pub const HuffmanError = error {
+    OutOfRange,
+};
 
 pub fn get_next(tree :HuffmanTree, bit :u1) !HuffmanTree {
     if (tree.has_value()) {
-        return error.OutOfRange;
+        return HuffmanError.OutOfRange;
     }
     var n :u32 = 0;
     if (bit == 0) {
@@ -60,7 +63,7 @@ pub fn get_next(tree :HuffmanTree, bit :u1) !HuffmanTree {
         n = tree.one();
     }
     if ( (n == 0) or (n >= raw_table.len)) {
-        return error.OutOfRange;
+        return HuffmanError.OutOfRange;
     } 
     return HuffmanTree{ .data = raw_table[n] };
 }
