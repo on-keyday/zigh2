@@ -744,10 +744,10 @@ test "frame encode decode test" {
    var decoder_table = hpack.Table.init(alloc,hpack.DEFAULT_TABLE_SIZE);
    defer decoder_table.deinit();
    for(0..100) |_| {
-      try hpack.addHeader(alloc, &hdr, "x-test", "test");
-      try hpack.addHeader(alloc, &hdr, "content-type", "text/html");
-      try hpack.addHeader(alloc, &hdr, "content-length", "0");
-      try hpack.addHeader(alloc, &hdr, "date", "Mon, 21 Oct 2013 20:13:21 GMT");
+      try hdr.add("x-test", "test");
+      try hdr.add("content-type", "text/html");
+      try hdr.add( "content-length", "0");
+      try hdr.add("date", "Mon, 21 Oct 2013 20:13:21 GMT");
    }
    try framer.encodeSettings(s.writer().any(),false,settings.DefinedSettings{.enablePush = false},null);
    try framer.encodeSettings(s.writer().any(),true,null,null);
