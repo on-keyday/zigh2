@@ -566,9 +566,10 @@ pub fn Connection(comptime mutexTy :type) type {
             }
             var frames :?Frames = null;
             errdefer if(frames) |*f|f.deinit(); 
+            var r = self.recvBuffer.reader().any();
             READ_LOOP:
             while(self.recvBuffer.readableLength() >= 9) {
-                const raw_header = try self.recvReader().readBytesNoEof(9);
+                const raw_header = try r.readBytesNoEof(9);
                 var no_unget = false;
                 try if(!no_unget) self.recvBuffer.unget(&raw_header);
                 var tmpr = std.io.fixedBufferStream(&raw_header);
