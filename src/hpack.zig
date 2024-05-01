@@ -429,7 +429,7 @@ pub const Header = struct {
     }
 
     pub fn add(self :*Header,key :[]const u8,value :[]const u8) !void {
-        addHeader(self.header.allocator,self,key,value);
+        try addHeader(self.header.allocator,self,key,value);
     }
 
     pub fn get(self :*Header,key :[]const u8) ?SameKey {

@@ -52,6 +52,13 @@ const FrameHeader = struct {
     typ: union(enum) {
         typ :H2FrameType,
         unknown_type:u8,
+
+        pub fn getType(self :@This()) ?H2FrameType {
+            switch(self) {
+                .typ => |t| return t,
+                .unknown_type => return null,
+            }
+        }
     },
     flags: Flags,
     stream_id: ID,
@@ -392,7 +399,7 @@ pub const Frame = struct {
         settings :?std.ArrayList(settings.Setting),
         push_promise :struct {
             promised_stream_id :ID,
-            header :hpack.Header,
+            header :?hpack.Header,
             padding :?u8,
         },
         ping :u64,
@@ -409,9 +416,9 @@ pub const Frame = struct {
 
     pub fn deinit(self :*Frame) void {
         switch(self.payload) {
-            .data => self.payload.data.data.deinit(),
-            .headers => self.payload.headers.header.deinit(),
-            .push_promise => self.payload.push_promise.header.deinit(),
+            .data => if(self.payload.data.data) |*d| d.deinit(),
+            .headers => if(self.payload.headers.header) |*h| h.deinit(),
+            .push_promise => if(self.payload.push_promise.header) |*h| h.deinit(),
             .goaway => if(self.payload.goaway.debug_data) |d| d.deinit(),
             .opaque_data => self.payload.opaque_data.deinit(),
             .settings => if(self.payload.settings) |x| x.deinit(),

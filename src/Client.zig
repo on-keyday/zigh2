@@ -20,7 +20,22 @@ pub const DummyMutex = struct {
 
 pub const SignleThreadClient = Connection(DummyMutex);
 const frame = Framer;
+const Frames = union(enum) {
+    one: Framer.Frame,
+    many:std.ArrayList(Framer.Frame),
 
+    pub fn deinit(self: *Frames) void {
+        switch(self.*) {
+            .one => |*o| o.deinit(),
+            .many => |*m| {
+                for(m.items) |*f| {
+                    f.deinit();
+                }
+                self.many.deinit();
+            }
+        }
+    }
+};
 
 pub const State = enum {
     IDLE,
@@ -137,7 +152,7 @@ pub fn StreamConfig(comptime mutexTy :type) type {
         recv_buffer :frame.DynamicStream,
         mutex :mutexTy,
         ref_count :std.atomic.Value(u32),
-        headers :std.fifo.LinearFifo(hpack.Header,.Dynamic),
+        headers :std.fifo.LinearFifo(RecvHeader,.Dynamic),
         err_code :?u32,
 
         const Self = @This();
@@ -157,7 +172,7 @@ pub fn StreamConfig(comptime mutexTy :type) type {
             self.recv_buffer = frame.DynamicStream.init(conn.alloc);
             self.mutex = mutexTy.init();
             self.ref_count = std.atomic.Value(u32).init(1);
-            self.headers = std.fifo.LinearFifo(hpack.Header,.Dynamic).init(conn.alloc);
+            self.headers = std.fifo.LinearFifo(RecvHeader,.Dynamic).init(conn.alloc);
             self.err_code = null;
             return self;
         }
@@ -294,13 +309,13 @@ pub fn StreamConfig(comptime mutexTy :type) type {
             defer if(trylocked) self.mutex.unlock();
             switch(f.payload) {
                 .data => |d| {
-                    try self.conn.recv_window.consume(d.data.len);
-                    try self.recv_window.consume(d.data.len);
+                    try self.conn.recv_window.consume(d.data.?.items.len);
+                    try self.recv_window.consume(d.data.?.items.len);
                     if(self.state != State.OPEN and self.state != State.HALF_CLOSED_LOCAL) {
                         return StreamError.InvalidState;
                     }
-                    try self.recv_buffer.writer().any().writeAll(d.data);
-                    if(d.flags.is_end_stream()) {
+                    try self.recv_buffer.writer().any().writeAll(d.data.?.items);
+                    if(f.header.flags.is_end_stream()) {
                         if(self.state == State.OPEN) {
                             // open - recv ES -> half-closed (remote)
                             self.state = State.HALF_CLSOED_REMOTE;
@@ -314,7 +329,7 @@ pub fn StreamConfig(comptime mutexTy :type) type {
                 .window_update => |w| {
                     try self.send_window.increase(w.increment);
                 },
-                .headers => |h| {    
+                .headers => |*h| {    
                     if(self.state != State.IDLE and self.state != State.RESERVED_REMOTE 
                        and self.state != State.HALF_CLOSED_LOCAL and self.state != State.OPEN) {
                         return StreamError.InvalidState;
@@ -329,7 +344,7 @@ pub fn StreamConfig(comptime mutexTy :type) type {
                         // reserved (remote) - recv H -> half-closed (local)
                         self.state = State.HALF_CLOSED_LOCAL;
                     }
-                    if(h.flags.is_end_stream()) {
+                    if(f.header.flags.is_end_stream()) {
                         if(self.state == State.OPEN) {
                             // open - recv ES -> half-closed (remote)
                             self.state = State.HALF_CLSOED_REMOTE;
@@ -340,7 +355,7 @@ pub fn StreamConfig(comptime mutexTy :type) type {
                         }
                     }
                 },
-                .push_promise => |p| {
+                .push_promise => |*p| {
                     if(self.state != State.IDLE) {
                         return StreamError.InvalidState;
                     }
@@ -355,6 +370,7 @@ pub fn StreamConfig(comptime mutexTy :type) type {
                     self.err_code = r.error_code;
                     self.state = State.CLOSED;
                 },
+                .opaque_data => {}, // not known frame, ignore
                 else => unreachable, // if in here, it's a bug
             }
         }
@@ -452,6 +468,17 @@ pub fn Connection(comptime mutexTy :type) type {
             return self.recvBuffer.reader().any();
         }
 
+        /// get the send buffer
+        /// the buffer's ownership is transferred to the caller
+        /// caller must call deinit() to release the buffer
+        pub fn getSendBuffer(self :*Self) frame.DynamicStream {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            const res = self.sendBuffer;
+            self.sendBuffer = Framer.DynamicStream.init(self.alloc);
+            return res;
+        }
+
         pub fn initClient(alloc :std.mem.Allocator,definedSettings :settings.DefinedSettings,additionalSettings :?[]settings.Setting) !*Self {
             var self :*Self = try alloc.create(Self);
             self.alloc = alloc;
@@ -511,22 +538,7 @@ pub fn Connection(comptime mutexTy :type) type {
             return stream;
         }
 
-        const Frames = union(enum) {
-            one: Framer.Frame,
-            many:std.ArrayList(Framer.Frame),
-
-            pub fn deinit(self: *Self) void {
-                switch(self) {
-                    Frames.one => self.one.deinit(),
-                    Frames.many => {
-                        for(self.many.items) |f| {
-                            f.deinit();
-                        }
-                        self.many.deinit();
-                    }
-                }
-            }
-        };
+       
 
 
         fn recvPeer(self :*Self,alloc :std.mem.Allocator, data :[]const u8) !?Frames {
@@ -535,76 +547,84 @@ pub fn Connection(comptime mutexTy :type) type {
             try self.recvWriter().writeAll(data);
             if (!self.prefaceRecved) {
                 if(self.recvBuffer.readableLength() < preface.len) {
-                    return;
+                    return null; // currently, no enough data
                 }
                 const expect = try self.recvReader().readBytesNoEof(preface.len);
-                if (!std.mem.eql(preface, expect)) {
+                if (!std.mem.eql(u8,preface, &expect)) {
                     return error.UnexpectedPreface;
                 }
                 self.prefaceRecved = true;
             }
             var frames :?Frames = null;
-            errdefer if(frames) |f|f.deinit(); 
+            errdefer if(frames) |*f|f.deinit(); 
             READ_LOOP:
             while(self.recvBuffer.readableLength() >= 9) {
                 const raw_header = try self.recvReader().readBytesNoEof(9);
                 var no_unget = false;
-                try if(!no_unget) self.recvBuffer.unget(raw_header);
-                var tmpr = std.io.fixedBufferStream(raw_header);
-                const header = try self.framer.decodeFrameHeader(&tmpr);
+                try if(!no_unget) self.recvBuffer.unget(&raw_header);
+                var tmpr = std.io.fixedBufferStream(&raw_header);
+                const header = try self.framer.decodeFrameHeader(tmpr.reader().any());
                 if(self.recvBuffer.readableLength() < header.length) {
                     break :READ_LOOP; // currently, no enough data
                 }
                 var len = header.length;
-                if(header.typ) |t| {
-                    if((t == Framer.H2FrameType.HEADERS or t == Framer.H2FrameType.PUSH_PROMISE) and !header.flags.is_end_headers()) {
-                        // in this special case, we need to analyze CONTINUATION frames are available for this HEADERS or PUSH_PROMISE frame
-                        var slice = self.recvBuffer.readableSlice(header.length);
-                        while(slice > 0) {
-                            if(slice.len < 9) {
-                                break :READ_LOOP; // currently, no enough data
+                switch(header.typ) { 
+                    .typ => |t| {
+                        if((t == Framer.H2FrameType.HEADERS or t == Framer.H2FrameType.PUSH_PROMISE) and !header.flags.is_end_headers()) {
+                            // in this special case, we need to analyze CONTINUATION frames are available for this HEADERS or PUSH_PROMISE frame
+                            var slice = self.recvBuffer.readableSlice(header.length);
+                            while(slice.len > 0) {
+                                if(slice.len < 9) {
+                                    break :READ_LOOP; // currently, no enough data
+                                }
+                                var tmphdr = std.io.fixedBufferStream(slice);
+                                const cont_header = try self.framer.decodeFrameHeader(tmphdr.reader().any());
+                                const cont_ty = switch(cont_header.typ) {
+                                    .typ => |ty| ty,
+                                    else => return error.UnexpectedFrame,
+                                };
+                                if(cont_ty != Framer.H2FrameType.CONTINUATION or cont_header.stream_id != header.stream_id) {
+                                    return error.UnexpectedFrame;
+                                }            
+                                if(cont_header.length + 9 > slice.len) {
+                                    break :READ_LOOP; // currently, no enough data
+                                }
+                                len += 9 + cont_header.length;
+                                if(cont_header.flags.is_end_headers()) {
+                                    break; // ok, we have all headers
+                                }
+                                slice = slice[9 + cont_header.length..];
                             }
-                            var tmphdr = std.io.fixedBufferStream(slice);
-                            const cont_header = try self.framer.decodeFrameHeader(tmphdr.reader().any());
-                            if(cont_header.typ != Framer.H2FrameType.CONTINUATION or cont_header.stream_id != header.stream_id) {
-                                return error.UnexpectedFrame;
-                            }            
-                            if(cont_header.length + 9 > slice.len) {
-                                break :READ_LOOP; // currently, no enough data
-                            }
-                            len += 9 + cont_header.length;
-                            if(cont_header.flags.is_end_headers()) {
-                                break; // ok, we have all headers
-                            }
-                            slice = slice[9 + cont_header.length..];
                         }
-                    }
+                    },
+                    else => {},
                 }
                 no_unget = true; // here, we don't need to unget the header
                 const payload = self.recvBuffer.readableSlice(len);
                 var tmpp = std.io.fixedBufferStream(payload);
                 var f = try self.framer.decodeFramesWithHeader(header,alloc,tmpp.reader().any(),&self.decodeTable);
                 errdefer f.deinit();
-                switch(frames) {
-                    null => {
-                        frames = .{.one = f};
-                    },
-                    Frames.one => {
-                        const tmp = std.ArrayList(Frames).init(alloc);
-                        errdefer {
-                            for(tmp.items) |t| {
-                                t.deinit();
+                if(frames) |*frms| {
+                    switch(frms.*) {
+                        .one => |o| {
+                            var tmp = std.ArrayList(frame.Frame).init(alloc);
+                            errdefer {
+                                for(tmp.items) |*t| {
+                                    t.deinit();
+                                }
+                                tmp.deinit();
                             }
-                            tmp.deinit();
-                        }
-                        try tmp.append(frames.one);
-                        frames = null; // for deinit safety
-                        try tmp.append(frame);
-                        frames = .{.many = tmp};
-                    },
-                    Frames.many => {
-                        try frames.many.append(frame);
+                            try tmp.append(o);
+                            frames = null; // for deinit safety
+                            try tmp.append(f);
+                            frames = .{.many = tmp};
+                        },
+                        .many => |*m| {
+                            try m.append(f);
+                        },
                     }
+                } else {
+                    frames = .{.one = f};
                 }
             }
             return frames;
@@ -638,7 +658,7 @@ pub fn Connection(comptime mutexTy :type) type {
                         const newWindow = setting.value;
                         var iter = self.streams.iterator();
                         while (iter.next()) |it| {
-                            var stream :*Stream = it.value_ptr;
+                            var stream :*Stream = it.value_ptr.*;
                             // NOTE(on-keyday): 
                             // at here connection lock is already acquired.
                             // if tryLock is succeed, we have to unlock it
@@ -649,9 +669,9 @@ pub fn Connection(comptime mutexTy :type) type {
                                 tryLocked = true;
                             }
                             defer if(tryLocked) stream.mutex.unlock();                            
-                            stream.send_window.window.set(newWindow - (oldWindow - stream.send_window.window.get()));
+                            stream.send_window.set(newWindow - (oldWindow - stream.send_window.get()));
                         }
-                        newSettings.initialWindowSize = setting.value;
+                        newSettings.initialWindowSize = @intCast(setting.value);
                     },
                     settings.SETTINGS_MAX_CONCURRENT_STREAMS => {
                         newSettings.maxConcurrentStreams = setting.value;
@@ -660,7 +680,7 @@ pub fn Connection(comptime mutexTy :type) type {
                         if(setting.value < settings.initialMaxFrameSize or setting.value > 0xffffff) {
                             return error.InvalidSettingValue;
                         }
-                        newSettings.maxFrameSize = setting.value;
+                        newSettings.maxFrameSize = @intCast(setting.value);
                         self.framer.peer_max_frame_size = @intCast(setting.value);
                     },
                     else => {}, // ignore
@@ -674,7 +694,7 @@ pub fn Connection(comptime mutexTy :type) type {
                     // nothing to do
                 } 
                 else {
-                    if(f.header.typ) |t| {
+                    if(f.header.typ.getType()) |t| {
                         if(t != Framer.H2FrameType.SETTINGS) {
                             return error.UnexpectedFrame;
                         }
@@ -692,7 +712,7 @@ pub fn Connection(comptime mutexTy :type) type {
                             // let's pong
                             self.mutex.lock();
                             defer self.mutex.unlock();
-                            try self.framer.encodePing(self.sendWriter(),true,p);
+                            try self.framer.encodePing(self.sendWriter(),p,true);
                         }
                     },
                     .window_update =>|w| {
@@ -707,7 +727,7 @@ pub fn Connection(comptime mutexTy :type) type {
                         else {
                             self.mutex.lock();
                             defer self.mutex.unlock();
-                            try self.setPeerSettings(s);
+                            try self.setPeerSettings(s.?.items);
                             // send ack
                             try self.framer.encodeSettings(self.sendWriter(),true,self.localSettings,null);
                         }
@@ -720,8 +740,10 @@ pub fn Connection(comptime mutexTy :type) type {
                         self.debugData = s.debug_data;   
                         s.debug_data = null; // for deinit safety                     
                     },
-                    else => unreachable, // if in here, it's a bug
+                    .opaque_data => {}, // not known frame, ignore
+                    else => unreachable,
                  }
+                return;
             }
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -736,23 +758,25 @@ pub fn Connection(comptime mutexTy :type) type {
             }
             const new_stream = try Stream.init(self,f.header.stream_id,State.IDLE);
             var no_deinit = false;
-            errdefer if(!no_deinit) new_stream.deinit();
+            errdefer if(!no_deinit) new_stream.deinit() catch {
+                // ignore, nothing can do
+            };
             try self.streams.put(f.header.stream_id,new_stream);
             no_deinit = true;
             try new_stream.handleFrame(f);
         }
 
         pub fn handlePeer(self :*Self,alloc :std.mem.Allocator, data :[]const u8) !void {
-            const frames = try self.recvPeer(alloc,data);
-            if(frames) |f| {
+            var frames = try self.recvPeer(alloc,data);
+            if(frames) |*f| {
                 defer f.deinit();
-                switch(f) {
-                    Frames.one => {
-                        try self.handleFrame(&f.one);
+                switch(f.*) {
+                    .one => |*o|  {
+                        try self.handleFrame(o);
                     },
-                    Frames.many => {
-                        for(f.many.items) |f2| {
-                            try self.handleFrame(&f2);
+                    .many => {
+                        for(f.many.items) |*f2| {
+                            try self.handleFrame(f2);
                         }
                     }
                 }
