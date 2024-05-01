@@ -78,7 +78,33 @@ pub fn decodeFrameHeader(self: Self,enc :std.io.AnyReader) anyerror!FrameHeader 
     return hdr;
 }
 
-const ID = u31;
+pub const ID = u31;
+
+pub fn isClientInitiated(id :ID) bool {
+    return id & 1 == 1;
+}
+
+pub fn isServerInitiated(id :ID) bool {
+    return id & 1 == 0;
+}
+
+pub fn nextStreamID(id :ID) ID {
+    return id + 2;
+}
+
+pub const ClientInitialID :ID = 1;
+
+
+
+comptime {
+    std.debug.assert(isClientInitiated(ClientInitialID));
+    std.debug.assert(!isServerInitiated(ClientInitialID));
+}
+pub const ServerInitialID :ID = 2;
+comptime {
+    std.debug.assert(!isClientInitiated(ServerInitialID));
+    std.debug.assert(isServerInitiated(ServerInitialID));
+}
 
 pub const CONNECTION :ID = 0;
 
@@ -163,13 +189,15 @@ fn encodeContinuations(self :Self, base :[]const u8,enc :std.io.AnyWriter,id :ID
     }
 }
 
+pub const DynamicStream = std.fifo.LinearFifo(u8,.Dynamic);
+
 /// https://www.rfc-editor.org/rfc/rfc9113.html#name-headers
 pub fn encodeHeaders(self :Self, alloc :std.mem.Allocator, enc :std.io.AnyWriter,id :ID,endOfStream :bool,header :hpack.Header,table :*hpack.Table,padding :?u8, priority :?Priority) !void  {
     if(id == CONNECTION) {
         return error.InvalidStreamID0;
     }
-    const DynamicWriter = std.fifo.LinearFifo(u8,.Dynamic);
-    var hpackCompressed :DynamicWriter = DynamicWriter.init(alloc);
+
+    var hpackCompressed :DynamicStream = DynamicStream.init(alloc);
     defer hpackCompressed.deinit();
     try hpack.encodeHeader(alloc,hpackCompressed.writer().any(),header,table,null);
     var slice = hpackCompressed.readableSlice(0);
@@ -216,8 +244,7 @@ pub fn encodePushPromise(self :Self,alloc :std.mem.Allocator,enc :std.io.AnyWrit
     if(padding) |_| {
         flags.set_padded();
     }
-    const DynamicWriter = std.fifo.LinearFifo(u8,.Dynamic);
-    var hpackCompressed :DynamicWriter = DynamicWriter.init(alloc);
+    var hpackCompressed :DynamicStream = DynamicStream.init(alloc);
     defer hpackCompressed.deinit();
     try hpack.encodeHeader(alloc,hpackCompressed.writer().any(),header,table,null);
     var slice = hpackCompressed.readableSlice(0);
