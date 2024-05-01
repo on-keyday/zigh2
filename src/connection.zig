@@ -184,6 +184,10 @@ pub fn StreamConfig(comptime mutexTy :type) type {
             defer self.mutex.unlock();
             self.conn.mutex.lock();
             defer self.conn.mutex.unlock();
+            if(self.conn.goawayCode) {
+                self.state = State.CLOSED;
+                return error.GoawayReceived;
+            }
             if(self.state != State.OPEN and self.state != State.HALF_CLSOED_REMOTE) {
                 return StreamError.InvalidState;
             }
@@ -215,6 +219,10 @@ pub fn StreamConfig(comptime mutexTy :type) type {
             defer self.mutex.unlock();
             self.conn.mutex.lock();
             defer self.conn.mutex.unlock();
+            if(self.conn.goawayCode)|_| {
+                self.state = State.CLOSED;
+                return error.GoawayReceived;
+            }
             if(self.state != State.IDLE and self.state != State.RESERVED_LOCAL
                 and self.state != State.HALF_CLSOED_REMOTE and self.state != State.OPEN) {
                 return StreamError.InvalidState;
@@ -245,6 +253,10 @@ pub fn StreamConfig(comptime mutexTy :type) type {
             defer self.mutex.unlock();
             self.conn.mutex.lock();
             defer self.conn.mutex.unlock();
+            if(self.conn.goawayCode)|_| {
+                self.state = State.CLOSED;
+                return error.GoawayReceived;
+            }
             const curWindow = self.recv_window.get();
             try self.recv_window.increase(increment);
             errdefer self.recv_window.set(curWindow);
@@ -259,6 +271,10 @@ pub fn StreamConfig(comptime mutexTy :type) type {
             defer self.mutex.unlock();
             self.conn.mutex.lock();
             defer self.conn.mutex.unlock();
+            if(self.conn.goawayCode) |_| {
+                self.state = State.CLOSED;
+                return;
+            }
             if(self.state == State.CLOSED or self.state == State.IDLE) {
                 return;
             }
@@ -547,6 +563,17 @@ pub fn Connection(comptime mutexTy :type) type {
             return stream;
         }
 
+        pub fn sendGoaway(self :*Self,code :u32, lastStreamID :Framer.ID, debugData :?[]const u8) !void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            try self.framer.encodeGoaway(self.sendBuffer.writer().any(),lastStreamID,code,debugData);
+            self.goawayCode = code;
+            self.finalStreamID = lastStreamID;
+            if(debugData) |d| {
+                self.debugData = try hpack.u8ArrayFromStr(self.alloc,d);
+            }
+        }
+
        
 
 
@@ -571,13 +598,14 @@ pub fn Connection(comptime mutexTy :type) type {
             while(self.recvBuffer.readableLength() >= 9) {
                 const raw_header = try r.readBytesNoEof(9);
                 var no_unget = false;
-                try if(!no_unget) self.recvBuffer.unget(&raw_header);
+                defer if(!no_unget) self.recvBuffer.unget(&raw_header) catch {
+                    // ignore, nothing can do
+                };
                 var tmpr = std.io.fixedBufferStream(&raw_header);
                 const header = try self.framer.decodeFrameHeader(tmpr.reader().any());
                 if(self.recvBuffer.readableLength() < header.length) {
                     break :READ_LOOP; // currently, no enough data
                 }
-                var len = header.length;
                 switch(header.typ) { 
                     .typ => |t| {
                         if((t == Framer.H2FrameType.HEADERS or t == Framer.H2FrameType.PUSH_PROMISE) and !header.flags.is_end_headers()) {
@@ -599,7 +627,6 @@ pub fn Connection(comptime mutexTy :type) type {
                                 if(cont_header.length + 9 > slice.len) {
                                     break :READ_LOOP; // currently, no enough data
                                 }
-                                len += 9 + cont_header.length;
                                 if(cont_header.flags.is_end_headers()) {
                                     break; // ok, we have all headers
                                 }
@@ -610,9 +637,7 @@ pub fn Connection(comptime mutexTy :type) type {
                     else => {},
                 }
                 no_unget = true; // here, we don't need to unget the header
-                const payload = self.recvBuffer.readableSlice(len);
-                var tmpp = std.io.fixedBufferStream(payload);
-                var f = try self.framer.decodeFramesWithHeader(header,alloc,tmpp.reader().any(),&self.decodeTable);
+                var f = try self.framer.decodeFramesWithHeader(header,alloc,r,&self.decodeTable);
                 errdefer f.deinit();
                 if(frames) |*frms| {
                     switch(frms.*) {
@@ -705,7 +730,8 @@ pub fn Connection(comptime mutexTy :type) type {
                 } 
                 else {
                     if(f.header.typ.getType()) |t| {
-                        if(t != Framer.H2FrameType.SETTINGS) {
+                        if(t != Framer.H2FrameType.SETTINGS and t != Framer.H2FrameType.PING 
+                        and t != Framer.H2FrameType.GOAWAY and t != Framer.H2FrameType.WINDOW_UPDATE) {
                             return error.UnexpectedFrame;
                         }                        
                     } else {
@@ -739,7 +765,7 @@ pub fn Connection(comptime mutexTy :type) type {
                             defer self.mutex.unlock();
                             try self.setPeerSettings(s.?.items);
                             // send ack
-                            try self.framer.encodeSettings(self.sendWriter(),true,self.localSettings,null);
+                            try self.framer.encodeSettings(self.sendWriter(),true,null,null);
                         }
                     },
                     .goaway => |*s| {
