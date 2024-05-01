@@ -27,11 +27,28 @@ pub fn main() !void {
     try bundle.addCertsFromFilePath(alloc,std.fs.cwd(),"cacert.pem");
     var tlsClient = try tls.Client.init(netStream,bundle,"shiguredo.jp");
     try tlsClient.writeAll(&netStream,request.readableSlice(0));
+    var peerHeader :?hpack.Header = null;
+    defer if(peerHeader) |*d| d.deinit();
     while(true) {
         var buf :[4096]u8 = undefined;
         const len = try tlsClient.read(&netStream,buf[0..]);
         try h2client.handlePeer(alloc, buf[0..len]);
-        const peerHeader = try stream.readHeader();
-        _ = peerHeader;
+        if(peerHeader == null) {
+            if(try stream.readHeader()) |header| {
+                peerHeader = header.header;
+            }
+            else {
+                continue;
+            }
+        }
+        const len2 = stream.recvData(buf[0..]);
+        if(len2 == null) {
+            break;
+        }
+        if(len2.? == 0) {
+            continue;
+        }
+        std.debug.print("recv data\n",.{});
+        std.debug.print("{s}\n",.{buf[0..len2.?]});
     }
 }

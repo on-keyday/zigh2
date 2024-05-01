@@ -182,23 +182,20 @@ pub fn StreamConfig(comptime mutexTy :type) type {
         pub fn sendData(self :*Self, data :[]const u8,eos :bool) !void {
             self.mutex.lock();
             defer self.mutex.unlock();
-            {
-                self.conn.mutex.lock();
-                defer self.conn.mutex.unlock();
-                // recheck for receiving 
-                if(self.state != State.OPEN and self.state != State.HALF_CLSOED_REMOTE) {
-                    return StreamError.InvalidState;
-                }
-                if(!self.send_window.can_consume(data.len)) {
-                    return error.WindowSizeError;
-                }
-                if(!self.conn.send_window.can_consume(data.len)){
-                    return error.WindowSizeError;
-                }
-                try self.conn.framer.encodeData(self.conn.sendBuffer.writer().any(),self.id,data,eos,null);
-                try self.conn.send_window.consume(data.len);
-                try self.send_window.consume(data.len);
+            self.conn.mutex.lock();
+            defer self.conn.mutex.unlock();
+            if(self.state != State.OPEN and self.state != State.HALF_CLSOED_REMOTE) {
+                return StreamError.InvalidState;
             }
+            if(!self.send_window.can_consume(data.len)) {
+                return error.WindowSizeError;
+            }
+            if(!self.conn.send_window.can_consume(data.len)){
+                return error.WindowSizeError;
+            }
+            try self.conn.framer.encodeData(self.conn.sendBuffer.writer().any(),self.id,data,eos,null);
+            try self.conn.send_window.consume(data.len);
+            try self.send_window.consume(data.len);
             if(eos) {
                 if(self.state == State.OPEN) {
                     // open - send ES -> half-closed (local)
@@ -216,15 +213,13 @@ pub fn StreamConfig(comptime mutexTy :type) type {
         pub fn sendHeader(self :*Self, alloc :std.mem.Allocator ,hdr :hpack.Header,eos :bool) !void {
             self.mutex.lock();
             defer self.mutex.unlock();
-            {
-                self.conn.mutex.lock();
-                defer self.conn.mutex.unlock();
-                if(self.state != State.IDLE and self.state != State.RESERVED_LOCAL
-                   and self.state != State.HALF_CLSOED_REMOTE and self.state != State.OPEN) {
-                    return StreamError.InvalidState;
-                }
-                try self.conn.framer.encodeHeaders(alloc,self.conn.sendWriter(),self.id,eos,hdr,&self.conn.encodeTable,null,null);
+            self.conn.mutex.lock();
+            defer self.conn.mutex.unlock();
+            if(self.state != State.IDLE and self.state != State.RESERVED_LOCAL
+                and self.state != State.HALF_CLSOED_REMOTE and self.state != State.OPEN) {
+                return StreamError.InvalidState;
             }
+            try self.conn.framer.encodeHeaders(alloc,self.conn.sendWriter(),self.id,eos,hdr,&self.conn.encodeTable,null,null);
             if(self.state == State.IDLE) {
                 // idle or reserved (local) - send H -> open
                 self.state = State.OPEN;
@@ -248,30 +243,26 @@ pub fn StreamConfig(comptime mutexTy :type) type {
         pub fn sendWindowUpdate(self :*Self,increment :u31) !void {
             self.mutex.lock();
             defer self.mutex.unlock();
-            {
-                self.conn.mutex.lock();
-                defer self.conn.mutex.unlock();
-                const curWindow = self.recv_window.get();
-                try self.recv_window.increase(increment);
-                errdefer self.recv_window.set(curWindow);
-                const curConnWindow = self.conn.recv_window.get();
-                try self.conn.recv_window.increase(increment);
-                errdefer self.conn.recv_window.set(curConnWindow);
-                try self.conn.framer.encodeWindowUpdate(self.conn.sendWriter(),self.id,increment);
-            }
+            self.conn.mutex.lock();
+            defer self.conn.mutex.unlock();
+            const curWindow = self.recv_window.get();
+            try self.recv_window.increase(increment);
+            errdefer self.recv_window.set(curWindow);
+            const curConnWindow = self.conn.recv_window.get();
+            try self.conn.recv_window.increase(increment);
+            errdefer self.conn.recv_window.set(curConnWindow);
+            try self.conn.framer.encodeWindowUpdate(self.conn.sendWriter(),self.id,increment);
         }
 
         pub fn close(self :*Self,code :u32) !void {
             self.mutex.lock();
             defer self.mutex.unlock();
-            {
-                self.conn.mutex.lock();
-                defer self.conn.mutex.unlock();
-                if(self.state == State.CLOSED or self.state == State.IDLE) {
-                    return;
-                }
-                try self.conn.framer.encodeRstStream(self.conn.sendWriter(),self.id,code);
+            self.conn.mutex.lock();
+            defer self.conn.mutex.unlock();
+            if(self.state == State.CLOSED or self.state == State.IDLE) {
+                return;
             }
+            try self.conn.framer.encodeRstStream(self.conn.sendWriter(),self.id,code);
             self.state = State.CLOSED;
         }
 
@@ -356,6 +347,7 @@ pub fn StreamConfig(comptime mutexTy :type) type {
                     }
                 },
                 .push_promise => |*p| {
+
                     if(self.state != State.IDLE) {
                         return StreamError.InvalidState;
                     }
@@ -375,13 +367,16 @@ pub fn StreamConfig(comptime mutexTy :type) type {
             }
         }
 
-        pub fn recvData(self :*Self,buf :[]u8) !usize {
+        pub fn recvData(self :*Self,buf :[]u8) ?usize {
             self.mutex.lock();
             defer self.mutex.unlock();
             if(self.recv_buffer.readableLength() == 0) {
-                return null;
+                if(self.state == State.CLOSED or self.state == State.HALF_CLSOED_REMOTE) {
+                    return null;
+                }
+                return 0;
             }
-            return try self.recv_buffer.read(buf);          
+            return self.recv_buffer.read(buf);          
         }
 
         pub fn readHeader(self :*Self) !?RecvHeader {
@@ -697,7 +692,7 @@ pub fn Connection(comptime mutexTy :type) type {
                     if(f.header.typ.getType()) |t| {
                         if(t != Framer.H2FrameType.SETTINGS) {
                             return error.UnexpectedFrame;
-                        }
+                        }                        
                     } else {
                         return error.UnexpectedFrame;
                     }
@@ -747,6 +742,9 @@ pub fn Connection(comptime mutexTy :type) type {
             }
             self.mutex.lock();
             defer self.mutex.unlock();
+            if(f.header.typ.getType()) |p| if(p == frame.H2FrameType.PUSH_PROMISE and !self.localSettings.enablePush) {
+                return error.PushPromiseNotEnabled;
+            };
             const exists = self.streams.get(f.header.stream_id);
             if(exists) |st| {
                 var stream :*Stream = st;
