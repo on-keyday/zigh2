@@ -1,10 +1,10 @@
 value :u8,
-const NONE = 0x0;
-const ACK = 0x1;
-const END_STREAM = 0x1;
-const PADDED = 0x8;
-const END_HEADERS = 0x4;
-const PRIORITY = 0x20;
+pub const NONE = 0x0;
+pub const ACK = 0x1;
+pub const END_STREAM = 0x1;
+pub const PADDED = 0x8;
+pub const END_HEADERS = 0x4;
+pub const PRIORITY = 0x20;
 const Self = @This();
 
 pub fn is_none(f:Self)  bool {
@@ -58,4 +58,7 @@ pub fn set_priority(f:*Self)  void {
 
 pub fn init()  Self {
     return Self { .value = NONE };
+}
+pub fn initValue(value:u8)  Self {
+    return Self { .value = value };
 }

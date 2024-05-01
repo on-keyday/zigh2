@@ -59,7 +59,7 @@ fn intToType(t :u8) ?H2FrameType {
     }
 }
 
-fn decodeFrameHeader(self: Self,enc :std.io.AnyReader) anyerror!FrameHeader {
+pub fn decodeFrameHeader(self: Self,enc :std.io.AnyReader) anyerror!FrameHeader {
     var hdr :FrameHeader = undefined;
     hdr.length = try enc.readInt( u24,.big);
     hdr.typ = .{.unknown_type = try enc.readByte()};
@@ -80,7 +80,7 @@ fn decodeFrameHeader(self: Self,enc :std.io.AnyReader) anyerror!FrameHeader {
 
 const ID = u31;
 
-const CONNECTION :ID = 0;
+pub const CONNECTION :ID = 0;
 
 fn encodeHeader(self :Self, enc :std.io.AnyWriter, id :ID,typ :H2FrameType,flags :Flags,len :usize) !void {
     if(len > 0x00FFFFFF) {
@@ -98,8 +98,17 @@ fn encodeHeader(self :Self, enc :std.io.AnyWriter, id :ID,typ :H2FrameType,flags
     try encodeFrameHeader(hdr,enc);
 }
 
-//https://www.rfc-editor.org/rfc/rfc9113.html#name-data
+fn mayWritePadding(len :?u8,enc :std.io.AnyWriter) !void {
+    if(len) |p| {
+        try enc.writeByteNTimes(0, p);
+    }
+}
+
+/// https://www.rfc-editor.org/rfc/rfc9113.html#name-data
 pub fn encodeData(self :Self,enc :std.io.AnyWriter,id :ID,data :[]const u8, endOfStream :bool, padding:?u8) !void {
+    if(id == CONNECTION) {
+        return error.InvalidStreamID0;
+    }
     var flags = Flags.init();
     if (endOfStream) {
         flags.set_end_stream();
@@ -135,9 +144,30 @@ pub const Priority = struct {
 };
 
 
+fn encodeContinuations(self :Self, base :[]const u8,enc :std.io.AnyWriter,id :ID) !void {
+    var flags = Flags.init();
+    var len :usize = 0;
+    var slice = base;
+    while(slice.len > 0) {
+        if(slice.len > self.peer_max_frame_size) {
+            len = self.peer_max_frame_size;
+        }
+        else {
+            flags.set_end_headers();
+            len = slice.len;
+        }
+        try self.encodeHeader(enc,id,H2FrameType.CONTINUATION,flags,len);
+        try enc.writeAll(slice[0..len]);
+        slice = slice[len..];
+        flags = Flags.init();
+    }
+}
 
-// https://www.rfc-editor.org/rfc/rfc9113.html#name-headers
+/// https://www.rfc-editor.org/rfc/rfc9113.html#name-headers
 pub fn encodeHeaders(self :Self, alloc :std.mem.Allocator, enc :std.io.AnyWriter,id :ID,endOfStream :bool,header :hpack.Header,table :*hpack.Table,padding :?u8, priority :?Priority) !void  {
+    if(id == CONNECTION) {
+        return error.InvalidStreamID0;
+    }
     const DynamicWriter = std.fifo.LinearFifo(u8,.Dynamic);
     var hpackCompressed :DynamicWriter = DynamicWriter.init(alloc);
     defer hpackCompressed.deinit();
@@ -156,6 +186,9 @@ pub fn encodeHeaders(self :Self, alloc :std.mem.Allocator, enc :std.io.AnyWriter
         flags.set_priority();
     }
     if(len > self.peer_max_frame_size) {
+        if(self.peer_max_frame_size < optional_fields_len) {
+            return error.InvalidMaxFrameSize;
+        }
         len = self.peer_max_frame_size;
     }
     else {
@@ -171,31 +204,59 @@ pub fn encodeHeaders(self :Self, alloc :std.mem.Allocator, enc :std.io.AnyWriter
         len -= 5;
     }
     try enc.writeAll(slice[0..len]);
-    slice = slice[len..];
+    try mayWritePadding(padding,enc);
+    try self.encodeContinuations(slice[len..],enc,id);
+}
+
+pub fn encodePushPromise(self :Self,alloc :std.mem.Allocator,enc :std.io.AnyWriter,id :ID,promised_stream_id :ID,header :hpack.Header,table :*hpack.Table,padding :?u8) !void {
+    if(id == CONNECTION) {
+        return error.InvalidStreamID0;
+    }
+    var flags = Flags.init();
+    if(padding) |_| {
+        flags.set_padded();
+    }
+    const DynamicWriter = std.fifo.LinearFifo(u8,.Dynamic);
+    var hpackCompressed :DynamicWriter = DynamicWriter.init(alloc);
+    defer hpackCompressed.deinit();
+    try hpack.encodeHeader(alloc,hpackCompressed.writer().any(),header,table,null);
+    var slice = hpackCompressed.readableSlice(0);
+    const optional_fields_len :usize= (if(padding) |p| 1 + p else 0) + 4;
+    var len = slice.len + optional_fields_len;
+    if(len > self.peer_max_frame_size) {
+        if(self.peer_max_frame_size < optional_fields_len) {
+            return error.InvalidMaxFrameSize;
+        }
+        len = self.peer_max_frame_size;
+    }
+    else {
+        flags.set_end_headers();
+    }
+    try self.encodeHeader(enc,id,H2FrameType.PUSH_PROMISE,flags,len);
     if(padding) |p| {
-        try enc.writeByteNTimes(0, p);
+        try enc.writeByte(p);
+        len -= 1 + p;
     }
-    while(slice.len > 0) {
-        flags = Flags.init();
-        if(slice.len > self.peer_max_frame_size) {
-            len = self.peer_max_frame_size;
-        }
-        else {
-            flags.set_end_headers();
-            len = slice.len;
-        }
-        try self.encodeHeader(enc,id,H2FrameType.CONTINUATION,flags,len);
-        try enc.writeAll(slice[0..len]);
-        slice = slice[len..];
-    }
+    try enc.writeInt(u32, @as(u32,promised_stream_id),.big);
+    len -= 4;
+    try enc.writeAll(slice[0..len]);
+    try mayWritePadding(padding,enc);
+    try self.encodeContinuations(slice[len..],enc,id);
 }
 
 const settings = @import("settings.zig");
 
+/// https://www.rfc-editor.org/rfc/rfc9113.html#name-settings
 pub fn encodeSettings(self: Self,enc :std.io.AnyWriter,ack :bool, definedSettings :?settings.DefinedSettings, additionalSettings :?[]settings.Setting) !void {
     var flags = Flags.init();
     if(ack) {
         flags.set_ack();
+        if(definedSettings) |_| {
+            return error.InvalidSettingsAck;
+        }
+        if(additionalSettings) |_| {
+            return error.InvalidSettingsAck;
+        }
     }
     const len = if(additionalSettings) |s| s.len * 6 else 0 + if(definedSettings) |x| settings.getEncodedDefinedSettingsLen(x) else 0;
     try self.encodeHeader(enc,CONNECTION,H2FrameType.SETTINGS,flags,len);
@@ -211,6 +272,7 @@ pub fn encodeSettings(self: Self,enc :std.io.AnyWriter,ack :bool, definedSetting
     }
 }
 
+/// https://www.rfc-editor.org/rfc/rfc9113.html#name-goaway
 pub fn encodeGoaway(self :Self,enc :std.io.AnyWriter,last_stream_id :ID,error_code :u32,debug_data :?[]const u8) !void {
     const len = 8 + if(debug_data) |d| d.len else 0;
     try self.encodeHeader(enc,CONNECTION,H2FrameType.GOAWAY,Flags.init(),len);
@@ -218,6 +280,42 @@ pub fn encodeGoaway(self :Self,enc :std.io.AnyWriter,last_stream_id :ID,error_co
     try enc.writeInt(u32, error_code,.big);
     if(debug_data) |d| try enc.writeAll(d);
 }
+
+/// https://www.rfc-editor.org/rfc/rfc9113.html#name-ping
+pub fn encodePing(self :Self,enc :std.io.AnyWriter,payload :u64,ack :bool) !void {
+    var flags = Flags.init();
+    if(ack) {
+        flags.set_ack();
+    }
+    try self.encodeHeader(enc,CONNECTION,H2FrameType.PING,flags,8);
+    try enc.writeInt(u64, payload,.big);
+}
+
+/// https://www.rfc-editor.org/rfc/rfc9113.html#name-priority
+pub fn encodePriority(self :Self,enc :std.io.AnyWriter,id :ID,priority :Priority) !void {
+    if(id == CONNECTION) {
+        return error.InvalidStreamID0;
+    }
+    try self.encodeHeader(enc,id,H2FrameType.PRIORITY,Flags.init(),5);
+    try enc.writeAll(&priority.encode());
+}
+
+/// https://www.rfc-editor.org/rfc/rfc9113.html#name-window_update
+pub fn encodeWindowUpdate(self :Self,enc :std.io.AnyWriter,id :ID,increment :u31) !void {
+    try self.encodeHeader(enc,id,H2FrameType.WINDOW_UPDATE,Flags.init(),4);
+    try enc.writeInt(u32, @as(u32,increment),.big);
+}
+
+/// https://www.rfc-editor.org/rfc/rfc9113.html#name-rst_stream
+pub fn encodeRstStream(self :Self,enc :std.io.AnyWriter,id :ID,error_code :u32) !void {
+    if(id == CONNECTION) {
+        return error.InvalidStreamID0;
+    }
+    try self.encodeHeader(enc,id,H2FrameType.RST_STREAM,Flags.init(),4);
+    try enc.writeInt(u32, error_code,.big);
+}
+
+
 
 
 
@@ -234,11 +332,14 @@ const Frame = struct {
             padding :?u8,
         },
         priority :Priority,
-        rst_stream :u32,
+        rst_stream :struct {
+            error_code :u32,
+        },
         settings :?std.ArrayList(settings.Setting),
         push_promise :struct {
             promised_stream_id :ID,
             header :hpack.Header,
+            padding :?u8,
         },
         ping :u64,
         goaway :struct {
@@ -246,7 +347,9 @@ const Frame = struct {
             error_code :u32,
             debug_data :hpack.U8Array,
         },
-        window_update :u32,
+        window_update :struct {
+            increment :u31,
+        },
         opaque_data :hpack.U8Array,
     },
 
@@ -263,7 +366,7 @@ const Frame = struct {
     }
 };
 
-fn readPadding(len :?u8, r :std.io.AnyReader) !void {
+fn mayReadPadding(len :?u8, r :std.io.AnyReader) !void {
     if(len) |p| {
         for(0..p) |_| {
             _ = try r.readByte();
@@ -345,15 +448,24 @@ fn typeIDCheck(comptime typ :H2FrameType,header :FrameHeader,opt :anytype) !void
             if(header.stream_id != CONNECTION) {
                 return error.InvalidStreamIDNot0;
             }
+            if(header.length != 8) {
+                return error.InvalidPingLength;
+            }
         },
         H2FrameType.PRIORITY => {
             if(header.stream_id == CONNECTION) {
                 return error.InvalidStreamID0;
             }
+            if(header.length != 5) {
+                return error.InvalidPriorityLength;
+            }
         },
         H2FrameType.PUSH_PROMISE => {
             if(header.stream_id == CONNECTION) {
                 return error.InvalidStreamID0;
+            }
+            if(header.length < 4) {
+                return error.InvalidPushPromiseLength;
             }
         },
         H2FrameType.RST_STREAM => {
@@ -377,7 +489,9 @@ fn typeIDCheck(comptime typ :H2FrameType,header :FrameHeader,opt :anytype) !void
             }
         },
         H2FrameType.WINDOW_UPDATE => {
-            // nothing to do
+            if(header.length != 4) {
+                return error.InvalidWindowUpdateLength;
+            }
         },
     }
 }
@@ -387,7 +501,23 @@ fn decodeData(alloc :std.mem.Allocator, r :std.io.AnyReader,frame :*Frame)  !voi
     var len = frame.*.header.length;
     try mayReadPadLen(&frame.payload.data.padding,&len,r,frame);
     frame.payload.data.data = try readBytes(len,alloc,r);
-    try readPadding(frame.payload.data.padding,r);
+    try mayReadPadding(frame.payload.data.padding,r);
+}
+
+fn mayReadCONTINUATIONs(self :Self,r :std.io.AnyReader,headerCompressed :*hpack.U8Array,flags :Flags,cmpID :ID) !void {
+    if(flags.is_end_headers()) {
+        return;
+    }
+    while(true) {
+        const hdr = try self.decodeFrameHeader(r);
+        try typeIDCheck(H2FrameType.CONTINUATION,hdr,cmpID);
+        const oldLen = headerCompressed.items.len;
+        try headerCompressed.resize(oldLen + hdr.length);
+        try r.readNoEof(headerCompressed.items[oldLen..]);
+        if(hdr.flags.is_end_headers()) {
+            break;
+        }
+    }
 }
 
 fn decodeHeaders(self :Self,table :*hpack.Table, alloc :std.mem.Allocator, r :std.io.AnyReader,frame :*Frame) !void {
@@ -398,19 +528,8 @@ fn decodeHeaders(self :Self,table :*hpack.Table, alloc :std.mem.Allocator, r :st
     try mayReadPriority(&len,&frame.payload.headers.priority,frame.header.flags,r);
     var headerCompressed = try readBytes(len,alloc,r);
     defer headerCompressed.deinit();
-    try readPadding(frame.payload.headers.padding,r);
-    if(!(frame.header.flags.is_end_headers())) {
-        while(true) {
-            const hdr = try self.decodeFrameHeader(r);
-            try typeIDCheck(H2FrameType.CONTINUATION,hdr,frame.header.stream_id);
-            const oldLen = headerCompressed.items.len;
-            try headerCompressed.resize(oldLen + hdr.length);
-            try r.readNoEof(headerCompressed.items[oldLen..]);
-            if(hdr.flags.is_end_headers()) {
-                break;
-            }
-        }
-    }
+    try mayReadPadding(frame.payload.headers.padding,r);
+    try self.mayReadCONTINUATIONs(r,&headerCompressed,frame.header.flags,frame.header.stream_id);
     var stream =  std.io.fixedBufferStream(headerCompressed.items);
     frame.payload.headers.header = try hpack.decodeHeader(alloc,stream.reader().any(),table);
 }
@@ -418,7 +537,7 @@ fn decodeHeaders(self :Self,table :*hpack.Table, alloc :std.mem.Allocator, r :st
 fn decodeSettings(alloc :std.mem.Allocator, r :std.io.AnyReader,frame :*Frame) !void {
     try typeIDCheck(H2FrameType.SETTINGS,frame.header,null);
     if(frame.header.length == 0) {
-        frame.payload.settings = null;
+        frame.payload = .{.settings = null};
         return;
     }
     frame.payload = .{.settings = std.ArrayList(settings.Setting).init(alloc)};
@@ -434,16 +553,63 @@ fn decodeGoaway(alloc :std.mem.Allocator, r :std.io.AnyReader,frame :*Frame) !vo
     if(frame.header.length < 8) {
         return error.InvalidGoawayLength;
     }
-    frame.payload.goaway.last_stream_id = try r.readInt(u32,.Big);
-    frame.payload.goaway.error_code = try r.readInt(u32,.Big);
-    try readBytes(&frame.payload.goaway.debug_data,frame.header.length - 8,alloc,r);
+    const last_id = try r.readInt(u32,.big);
+    if(last_id > 0x7FFFFFFF) {
+        return error.InvalidStreamIDReservedBit;
+    }
+    frame.payload = .{.goaway = undefined};
+    frame.payload.goaway.last_stream_id = @intCast(last_id);
+    frame.payload.goaway.error_code = try r.readInt(u32,.big);
+    frame.payload.goaway.debug_data = try readBytes(frame.header.length - 8,alloc,r);
 }
 
-/// Decode one or more frames from the reader.
-/// if frame is a HEADER frame and the END_HEADERS flag is not set, the function will read the continuation frames.
-/// and decode the headers.
-pub fn decodeFrames(self :Self, alloc :std.mem.Allocator, r :std.io.AnyReader,table :*hpack.Table) !Frame {
-    const hdr :FrameHeader= try self.decodeFrameHeader(r);
+fn decodePing(r :std.io.AnyReader,frame :*Frame) !void {
+    try typeIDCheck(H2FrameType.PING,frame.header,null);
+    frame.payload = .{.ping = try r.readInt(u64,.big)};
+}
+
+fn decodeWindowUpdate(r :std.io.AnyReader,frame :*Frame) !void {
+    try typeIDCheck(H2FrameType.WINDOW_UPDATE,frame.header,null);
+    const update = try r.readInt(u32,.big);
+    if(update > 0x7FFFFFFF) {
+        return error.InvalidStreamIDReservedBit;
+    }
+    if(update == 0) {
+        return error.InvalidWindowUpdateIncrement;
+    }
+    frame.payload = .{.window_update = .{ .increment = @intCast(update) }};
+}
+fn decodeRstStream(r :std.io.AnyReader,frame :*Frame) !void {
+    try typeIDCheck(H2FrameType.RST_STREAM,frame.header,null);
+    frame.payload = .{.rst_stream = .{.error_code =try r.readInt(u32,.big)}};
+}
+
+fn decodePushPromise(self :Self,table :*hpack.Table, alloc :std.mem.Allocator, r :std.io.AnyReader,frame :*Frame)!void {
+    try typeIDCheck(H2FrameType.PUSH_PROMISE,frame.header,null);
+    var len = frame.*.header.length;
+    frame.payload = .{.push_promise = undefined};
+    try mayReadPadLen(&frame.payload.push_promise.padding,&len,r,frame);
+    const promise_id = try r.readInt(u32,.big);
+    if(promise_id > 0x7FFFFFFF) {
+        return error.InvalidStreamIDReservedBit;
+    }
+    if(promise_id == CONNECTION) {
+        return error.InvalidStreamID0;
+    }
+    if(len < 4) {
+        return error.InvalidPushPromiseLength;
+    }
+    len -= 4;
+    frame.payload.push_promise.promised_stream_id = @intCast(promise_id);
+    var headerCompressed = try readBytes(len,alloc,r);
+    defer headerCompressed.deinit();
+    try mayReadPadding(frame.payload.push_promise.padding,r);
+    try self.mayReadCONTINUATIONs(r,&headerCompressed,frame.header.flags,frame.payload.push_promise.promised_stream_id);
+    var stream =  std.io.fixedBufferStream(headerCompressed.items);
+    frame.payload.push_promise.header = try hpack.decodeHeader(alloc,stream.reader().any(),table);
+}
+
+pub fn decodeFramesWithHeader(self :Self,hdr :FrameHeader, alloc :std.mem.Allocator, r :std.io.AnyReader,table :*hpack.Table) !Frame {
     var frame = Frame{ .header = hdr, .payload = undefined };
     errdefer frame.deinit();
     switch(frame.header.typ) {
@@ -460,8 +626,24 @@ pub fn decodeFrames(self :Self, alloc :std.mem.Allocator, r :std.io.AnyReader,ta
             H2FrameType.SETTINGS => {
                 try decodeSettings(alloc,r,&frame);
             },
-            else => {
-                @panic("Not implemented");
+            H2FrameType.GOAWAY => {
+                try decodeGoaway(alloc,r,&frame);
+            },
+            H2FrameType.PING => {
+                try decodePing(r,&frame);
+            },
+            H2FrameType.PRIORITY => {
+                try typeIDCheck(H2FrameType.PRIORITY,frame.header,null);
+                frame.payload = .{.priority = try readPriority(r)};
+            },
+            H2FrameType.WINDOW_UPDATE => {
+                try decodeWindowUpdate(r,&frame);
+            },
+            H2FrameType.RST_STREAM => {
+                try decodeRstStream(r,&frame);
+            },
+            H2FrameType.PUSH_PROMISE => {
+                try self.decodePushPromise(table,alloc,r,&frame);
             }
         },
         else => {
@@ -469,6 +651,14 @@ pub fn decodeFrames(self :Self, alloc :std.mem.Allocator, r :std.io.AnyReader,ta
         }
     }
     return frame;
+}
+
+/// Decode one or more frames from the reader.
+/// if frame is a HEADER or PUSH_PROMISE frame and the END_HEADERS flag is not set, the function will read the CONTINUATION frames.
+/// and decode the headers.
+pub fn decodeFrames(self :Self, alloc :std.mem.Allocator, r :std.io.AnyReader,table :*hpack.Table) !Frame {
+    const hdr :FrameHeader= try self.decodeFrameHeader(r);
+    return try self.decodeFramesWithHeader(hdr,alloc,r,table);
 } 
 
 pub fn init() Self {

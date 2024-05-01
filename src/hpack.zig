@@ -26,7 +26,7 @@ pub fn encodeInteger(w :std.io.AnyWriter, comptime prefix_len :u32,comptime pref
         try w.writeByte(prefix | mask);
         var val :u64 = value;
         val -= @intCast(mask);
-        while(val >= 128) {
+        while(val > 0x7f) {
              const t :u8 = @intCast(val & 0x7F);
              try w.writeByte(t | 0x80);
              val >>= 7;
@@ -56,7 +56,7 @@ pub fn decodeIntegerWithFirstByte(r :std.io.AnyReader,comptime prefix_len :u32, 
         }
         b = try r.readByte();
         const s :u6 = @intCast(shift);
-        value |= @as(u64,b & 0x7F) << s;
+        value += @as(u64,b & 0x7F) << s;
         if (b & 0x80 == 0) {
             break;
         }
@@ -288,7 +288,7 @@ fn equalKey(key1 :[]const u8,key2 :[]const u8) bool {
 }
 
 fn getTableEntry(table :?*Table,key :[]const u8, value :[]const u8,only_hdr_equal :bool) ?KeyValEntry {
-    for(predefinedHeaders,0..) |entry,i| {
+    for(predefinedHeaders[1..],1..) |entry,i| {
         if(!only_hdr_equal) {
             if(equalKey(key, entry.key) and equalKey(value, entry.value)) {
                 return KeyValEntry{.keyvalue = entry, .index = i};
@@ -369,13 +369,13 @@ pub fn addHeader(alloc :std.mem.Allocator, hdr :*Header, key :[]const u8,values 
 }
 
 pub fn equalHeader(hdr1 :Header,hdr2 :Header) bool {
-    if(hdr1.count() != hdr2.count()) {
+    if(hdr1.header.count() != hdr2.header.count()) {
         return false;
     }
-    var iter1 = hdr1.iterator();
+    var iter1 = hdr1.header.iterator();
     while(iter1.next()) |entry1| {
-        const entry2  =if (hdr2.get(entry1.key_ptr.*)) |x| x else return false;
-        if(entry1.value_ptr.*.items.len != entry2.items.len) {
+        const entry2  =if (hdr2.header.get(entry1.key_ptr.*)) |x| x else return false;
+        if(entry1.value_ptr.items.len != entry2.items.len) {
             return false;
         }
         const iter3 = entry1.value_ptr.*.items;
@@ -655,6 +655,7 @@ pub fn encodeHeader(alloc :std.mem.Allocator,w :std.io.AnyWriter,header :Header,
 
 pub fn decodeHeader(alloc :std.mem.Allocator,r :std.io.AnyReader,table :?*Table) !Header {
     var header = Header.init(alloc);
+    errdefer header.deinit();
     while(true) {
         const b = r.readByte();
         if(b) |first_byte| {
@@ -670,17 +671,15 @@ pub fn decodeHeader(alloc :std.mem.Allocator,r :std.io.AnyReader,table :?*Table)
     return header;
 }
 
-fn printHeader(header :Header) !void {
-    var iter = header.iterator();
-    const stdout = std.io.getStdOut().writer();
+pub fn printHeader(out :anytype, header :Header) !void {
+    var iter = header.header.iterator();
     while(iter.next()) |field| {
         const key :U8Array = field.key_ptr.*;
         for(field.value_ptr.*.items) |v| {
             const value :U8Array = v;
-            try stdout.print("{s}: {s}\n", .{key.items, value.items});
+            try out.print("{s}: {s}\n", .{key.items, value.items});
         }
     }
-
 }
 test "http2 header encode/decode" {
     const hpack = @This();
@@ -699,8 +698,8 @@ test "http2 header encode/decode" {
     const decodedHeader = try hpack.decodeHeader(alloc, reader.reader().any(),null);
     const stdout = std.io.getStdOut().writer();
     try stdout.print("Header\n",.{});
-    try printHeader(header);
+    try printHeader(stdout,header);
     try stdout.print("Decoded Header\n",.{});
-    try printHeader(decodedHeader);
+    try printHeader(stdout,decodedHeader);
     try std.testing.expect(hpack.equalHeader(header,decodedHeader));
 }
