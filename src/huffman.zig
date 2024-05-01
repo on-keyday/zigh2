@@ -24,18 +24,6 @@ pub const HuffmanTree = struct {
     pub fn zero(self :Self) u16 {
         return @intCast(self.data & mask_zero);
     }
-    fn is_not_set(self :Self) bool {
-        return self.data == 0;
-    }
-    fn set_zero(self :Self, z :u16) Self {
-        return Self{ .data = (self.data & mask_one) | z };
-    }
-    fn set_one(self :Self, o :u16) void {
-        self.data = (self.data & mask_zero) | (o << mask_shift);
-    }
-    fn set_value(self :Self, v :u32) !void {
-        self.data = v | flag_value;  
-    }
     pub fn has_value(self :Self) bool {
         return self.data & flag_value != 0;
     }

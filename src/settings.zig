@@ -35,7 +35,7 @@ pub const DefinedSettings = struct {
     headerTableSize :u32 = hpack.DEFAULT_TABLE_SIZE,
     enablePush :bool = true,
     maxConcurrentStreams :?u32 = null, // default unlimited
-    initialWindowSize :u32 = 65535,
+    initialWindowSize :u31 = 65535,
     maxFrameSize :u24 = initialMaxFrameSize,
 
     omit_default :bool = true,

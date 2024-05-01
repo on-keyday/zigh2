@@ -361,7 +361,7 @@ const StrHasher = struct {
     }
 };
 
-pub fn addHeader(alloc :std.mem.Allocator, hdr :*Header, key :[]const u8,values :[]const u8) !void  {
+fn addHeader(alloc :std.mem.Allocator, hdr :*Header, key :[]const u8,values :[]const u8) !void  {
     const key_array = try u8ArrayFromStr(alloc,key);
     const hdr_entry = try hdr.header.getOrPut(key_array);
     if(!hdr_entry.found_existing) {
@@ -426,6 +426,22 @@ pub const Header = struct {
 
     fn getOrPut(self :*Header,key :U8Array) !Map.GetOrPutResult {
         return self.header.getOrPut(key);
+    }
+
+    pub fn add(self :*Header,key :[]const u8,value :[]const u8) !void {
+        addHeader(self.header.allocator,self,key,value);
+    }
+
+    pub fn get(self :*Header,key :[]const u8) ?SameKey {
+        const key_array = u8ArrayFromStr(self.header.allocator,key);
+        defer key_array.deinit();
+        return if (self.header.get(key_array)) |x| x else null;
+    }
+
+    pub fn remove(self :*Header,key :[]const u8) bool {
+        const key_array = u8ArrayFromStr(self.header.allocator,key);
+        defer key_array.deinit();
+        return self.header.swapRemove(key_array);
     }
 };
 
@@ -506,18 +522,6 @@ fn addHeaderDynamic(alloc :std.mem.Allocator,hdr :*Header,key :U8Array,value :U8
     try hdr_entry.value_ptr.append(value);
 }
 
-
-//fn appendHeader(alloc :std.mem.Allocator, hdr :*Header,key :[]const u8,value :[]const u8) !void {
-//    const key_array = try u8ArrayFromStr(alloc,key);
-//    const hdr_entry = try hdr.getOrPut(key_array);
-//    if(!hdr_entry.found_existing) {
-//        hdr_entry.value_ptr.* = SameKey.init(alloc);
-//    }
-//    else {
-//        key_array.deinit();
-//    }
-//    try hdr_entry.value_ptr.*.append(try u8ArrayFromStr(hdr.allocator,value));
-//}
 
 
 fn lookupTableIndex(index :u64,table :?*Table) !KeyValEntry {

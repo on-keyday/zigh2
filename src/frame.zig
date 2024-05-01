@@ -378,10 +378,10 @@ pub const Frame = struct {
     payload: union(enum) {
         data :struct {
             padding :?u8,
-            data :hpack.U8Array,
+            data :?hpack.U8Array,
         },
         headers :struct {
-            header :hpack.Header,
+            header :?hpack.Header,
             priority :?Priority,
             padding :?u8,
         },
@@ -399,7 +399,7 @@ pub const Frame = struct {
         goaway :struct {
             last_stream_id :ID,
             error_code :u32,
-            debug_data :hpack.U8Array,
+            debug_data :?hpack.U8Array,
         },
         window_update :struct {
             increment :u31,
@@ -412,13 +412,15 @@ pub const Frame = struct {
             .data => self.payload.data.data.deinit(),
             .headers => self.payload.headers.header.deinit(),
             .push_promise => self.payload.push_promise.header.deinit(),
-            .goaway => self.payload.goaway.debug_data.deinit(),
+            .goaway => if(self.payload.goaway.debug_data) |d| d.deinit(),
             .opaque_data => self.payload.opaque_data.deinit(),
             .settings => if(self.payload.settings) |x| x.deinit(),
             else => {},
         }
     }
+
 };
+
 
 fn mayReadPadding(len :?u8, r :std.io.AnyReader) !void {
     if(len) |p| {
