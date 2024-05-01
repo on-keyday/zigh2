@@ -407,9 +407,6 @@ pub fn Connection(comptime mutexTy :type) type {
         localSettings :settings.DefinedSettings,
         settingsAcked :bool = false,
         peerSettings :?settings.DefinedSettings,
-        finalStreamID :?Framer.ID = null,
-        goawayCode :?u32 = null,
-        debugData :?hpack.U8Array = null,
         ref_count :std.atomic.Value(u32),
         isClient :bool = true,  // for now, we only support client
         alloc :std.mem.Allocator, // shared with all streams
@@ -419,6 +416,10 @@ pub fn Connection(comptime mutexTy :type) type {
         /// transition to "closed". That is, an endpoint may skip a stream identifier, 
         /// with the effect being that the skipped stream is immediately closed.
         peerOpenMax :frame.ID,
+
+        finalStreamID :?Framer.ID = null,
+        goawayCode :?u32 = null,
+        debugData :?hpack.U8Array = null,
 
         pub const Stream = StreamConfig(mutexTy);
 
@@ -474,8 +475,9 @@ pub fn Connection(comptime mutexTy :type) type {
             return res;
         }
 
-        pub fn initClient(alloc :std.mem.Allocator,definedSettings :settings.DefinedSettings,additionalSettings :?[]settings.Setting) !*Self {
+        pub fn init(alloc :std.mem.Allocator,client :bool ,definedSettings :settings.DefinedSettings,additionalSettings :?[]settings.Setting) !*Self {
             var self :*Self = try alloc.create(Self);
+            self.* = undefined;
             self.alloc = alloc;
             errdefer self.deinit();
             self.mutex = mutexTy.init();
@@ -491,28 +493,40 @@ pub fn Connection(comptime mutexTy :type) type {
             self.framer.local_max_frame_size = definedSettings.maxFrameSize;
 
             // write preface and settings
-            try self.sendPreface();
-            self.prefaceRecved = true; // no preface will receive from the server
+            if(client) {   
+                try self.sendPreface();
+                self.prefaceRecved = true; // no preface will receive from the server
+            }
             try self.framer.encodeSettings(self.sendWriter(),false,definedSettings,additionalSettings);
             
             // set the local settings
             self.localSettings = definedSettings;
+            self.peerSettings = null;
 
             // set the window size
             self.recv_window = Window(mutexTy).init(definedSettings.initialWindowSize);
             self.send_window = Window(mutexTy).init(settings.initialWindowSize);
             
             // set the table
-            self.encodeTable = hpack.Table.init(alloc,hpack.DEFAULT_TABLE_SIZE);
             self.decodeTable = hpack.Table.init(alloc,definedSettings.headerTableSize);
+            self.encodeTable = hpack.Table.init(alloc,hpack.DEFAULT_TABLE_SIZE);
+           
 
             self.settingsAcked = false;
-            self.nextID = Framer.ClientInitialID;
+            self.nextID = if(client) frame.ClientInitialID else frame.ServerInitialID;
 
             self.ref_count = std.atomic.Value(u32).init(1);
 
-            self.isClient = true;
-            
+            self.streams = std.AutoArrayHashMap(Framer.ID,*Stream).init(alloc);
+
+            self.isClient = client;
+
+            self.peerOpenMax = 0;
+
+            self.goawayCode = null;
+            self.finalStreamID = null;
+            self.debugData = null;
+
             return self;
         }
 
@@ -539,7 +553,7 @@ pub fn Connection(comptime mutexTy :type) type {
         fn recvPeer(self :*Self,alloc :std.mem.Allocator, data :[]const u8) !?Frames {
             self.mutex.lock();
             defer self.mutex.unlock();
-            try self.recvWriter().writeAll(data);
+            try self.recvBuffer.writer().any().writeAll(data);
             if (!self.prefaceRecved) {
                 if(self.recvBuffer.readableLength() < preface.len) {
                     return null; // currently, no enough data

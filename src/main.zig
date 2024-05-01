@@ -5,13 +5,13 @@ const frame = @import("frame.zig");
 
 const settings = @import("settings.zig");
 const Flags = @import("Flags.zig");
-const client = @import("client.zig");
-const tls = std.crypto.tls;
+const connection = @import("connection.zig");
+const TLSClient = @import("tls/Client.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
-    var h2client  = try client.SignleThreadClient.initClient(alloc,.{.enablePush = false},null);
+    var h2client  = try connection.SignleThreadClient.init(alloc,true,.{.enablePush = false},null);
     var stream = try h2client.createStream();
     try stream.deinit();
     var hdr = hpack.Header.init(alloc);
@@ -22,13 +22,15 @@ pub fn main() !void {
     try hdr.add("user-agent","ZigH2Client/0.1.0");
     try stream.sendHeader(alloc,hdr,true);    
     const request = h2client.getSendBuffer();
-    var netStream = try std.net.tcpConnectToHost(alloc,"shiguredo.jp",443);
+    var netStream = try std.net.tcpConnectToHost(alloc,"localhost",443);
     var bundle =  std.crypto.Certificate.Bundle{};
-    try bundle.addCertsFromFilePath(alloc,std.fs.cwd(),"cacert.pem");
-    var tlsClient = try tls.Client.init(netStream,bundle,"shiguredo.jp");
+    try bundle.addCertsFromFilePath(alloc,std.fs.cwd(),"test/cert/root_ca.crt");
+    const alpn :[3]u8 = "\x02h2".*;
+    var tlsClient = try TLSClient.init(netStream,bundle,"localhost",alpn);
     try tlsClient.writeAll(&netStream,request.readableSlice(0));
     var peerHeader :?hpack.Header = null;
     defer if(peerHeader) |*d| d.deinit();
+
     while(true) {
         var buf :[4096]u8 = undefined;
         const len = try tlsClient.read(&netStream,buf[0..]);

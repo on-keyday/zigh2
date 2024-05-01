@@ -39,6 +39,15 @@
             "type": "cppvsdbg",
             "request": "attach",
             "processId": "${command:pickProcess}"
+        },
+        {
+            "name": "Go server",
+            "type": "go",
+            "request": "launch",
+            "program": "${workspaceRoot}/test/server.go",
+            "env": {
+                "GODEBUG": "http2debug=2",
+            }
         }
     ]
 }
