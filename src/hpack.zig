@@ -109,7 +109,7 @@ fn decodeSingleChar(r :*huffman.BitReader,allone :*u32) anyerror!huffman.Huffman
             return x;
         };
         allone.* = if ((allone.* != 0) and (bit != 0)) allone.* + 1 else 0;
-        node = try huffman.get_next(node, bit);
+        node = try huffman.getNext(node, bit);
     }
 }
 

@@ -41,7 +41,7 @@ pub const HuffmanError = error {
     OutOfRange,
 };
 
-pub fn get_next(tree :HuffmanTree, bit :u1) !HuffmanTree {
+pub fn getNext(tree :HuffmanTree, bit :u1) !HuffmanTree {
     if (tree.has_value()) {
         return HuffmanError.OutOfRange;
     }
@@ -353,3 +353,15 @@ Code{.code = 1073741823, .bits = 30, .literal =256},
 
 
 };
+
+test "test c" {
+    const root = getRoot();
+    const n1 = try getNext(root,0);
+    const n2 = try getNext(n1,0);
+    const n3 = try getNext(n2,1);
+    const n4 = try getNext(n3,0);
+    const n5 = try getNext(n4,0);
+    try std.testing.expect(n5.has_value());
+    try std.testing.expect(n5.get_value() == 'c');
+    try std.testing.expectEqual(n5.data,HuffmanTree.flag_value | 0x63);
+}
