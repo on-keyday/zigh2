@@ -765,6 +765,7 @@ pub fn decodeFramesWithHeader(self :Self,hdr :FrameHeader, alloc :std.mem.Alloca
             frame.payload.opaque_data =  try readBytes(frame.header.length,alloc,r);
         }
     }
+    std.log.debug("frame parsed: {}\n",.{frame});
     return frame;
 }
 
