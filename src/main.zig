@@ -58,7 +58,7 @@ pub fn main() !void {
     try tlsClient.writeAll(&netStream,request.readableSlice(0));
     var peerHeader :?hpack.Header = null;
     defer if(peerHeader) |*d| d.deinit();
-    const out = try std.io.getStdOut();
+    const out = std.io.getStdOut();
     while(true) {
         const request2 = h2client.getSendBuffer();
         defer request2.deinit();
