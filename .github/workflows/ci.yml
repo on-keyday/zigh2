@@ -42,11 +42,12 @@ jobs:
              # run below command 10 times with sleep 1 second per iteration
              for i in {1..10}; do 
                 echo "Iteration $i"
-                ./zig-out/bin/zigh2 && sleep 1
+                ./zig-out/bin/zigh2
                 if [ $? -ne 0 ]; then
                     echo "Failed on iteration $i"
                     exit 1
                 fi
+                sleep 3
              done
       - name: Cat
         run: |
