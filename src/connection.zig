@@ -643,9 +643,10 @@ pub fn Connection(comptime mutexTy :type) type {
                 };
                 var tmpr = std.io.fixedBufferStream(&raw_header);
                 const header = self.framer.decodeFrameHeader(tmpr.reader().any()) catch |err| {
-                    std.log.debug("raw_header: {any} remaining_len: {} remaining_data: {any} remaining_data_str: {s}\n",.{
+                    std.log.debug("raw_header: {any} remaining_len: {} remaining_data: {any}\n remaining_data_str: {s}\n",.{
                         raw_header,
                         self.recvBuffer.readableLength(),
+                        self.recvBuffer.readableSlice(0),
                         self.recvBuffer.readableSlice(0),
                     });
                     return err;
