@@ -51,6 +51,7 @@ pub fn main() !void {
         }
         var buf :[4096]u8 = undefined;
         const len = try tlsClient.read(&netStream,buf[0..]);
+        std.debug.print("read: {} data:{any}\n",.{len,buf[0..len]});
         try h2client.handlePeer(alloc, buf[0..len]);
         if(peerHeader == null) {
             if(try stream.readHeader()) |header| {
