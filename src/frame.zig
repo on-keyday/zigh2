@@ -116,13 +116,23 @@ fn intToType(t :u8) ?H2FrameType {
 pub fn decodeFrameHeader(self: Self,enc :std.io.AnyReader) anyerror!FrameHeader {
     var hdr :FrameHeader = undefined;
     hdr.length = try enc.readInt( u24,.big);
-    hdr.typ = .{.unknown_type = try enc.readByte()};
+    hdr.typ = .{.unknown_type = enc.readByte() catch |err| {
+        std.log.debug("length: {}",.{hdr.length});
+        return err;
+    }};
     if(intToType(hdr.typ.unknown_type)) |typ| {
         hdr.typ = .{.typ = typ};
     }
-    hdr.flags.value = try enc.readByte();
-    const valID = try enc.readInt(u32,.big);
+    hdr.flags.value = enc.readByte() catch |err| {
+        std.log.debug("length: {} typ: {}\n",.{hdr.stream_id,hdr.typ});  
+        return err;
+    };
+    const valID = enc.readInt(u32,.big) catch |err| {
+        std.log.debug("length: {} typ: {} flags: {}\n",.{hdr.length,hdr.typ,hdr.flags});
+        return err;
+    };
     if(valID > 0x7FFFFFFF) {
+        std.log.debug("length: {} typ: {} flags: {} invalid_stream_id: {} maybe_id: {}\n",.{valID,hdr.typ,hdr.flags,valID,valID & 0x7fffffff});
         return FrameError.InvalidStreamIDReservedBit;
     }
     hdr.stream_id = @intCast( valID);
