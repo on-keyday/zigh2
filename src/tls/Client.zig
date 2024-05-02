@@ -1,4 +1,4 @@
-/// Original Source code: MIT License https://github.com/ziglang/zig/blob/master/lib/std/crypto/tls/Client.zig
+/// Original Source code: MIT License https://github.com/ziglang/zig/blob/0.12.0/lib/std/crypto/tls/Client.zig
 /// because lack of support for ALPN, we need to use a custom version of the tls.Client
 
 const std = @import("std"); // modified
