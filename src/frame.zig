@@ -782,20 +782,20 @@ test "frame encode decode test" {
    try std.testing.expectEqual(h.header.stream_id,1);
    try std.testing.expectEqual(h.header.typ.typ,frame.H2FrameType.HEADERS);
    try std.testing.expectEqual(h.header.flags,Flags.initValue(Flags.END_HEADERS));
-   try std.testing.expect(hpack.equalHeader(hdr,h.payload.headers.header));
+   try std.testing.expect(hpack.equalHeader(hdr,h.payload.headers.header.?));
    var b = try framer.decodeFrames(alloc,s.reader().any(),&decoder_table);
    defer b.deinit();
    try std.testing.expectEqual(b.header.stream_id,1);
    try std.testing.expectEqual(b.header.typ.typ,frame.H2FrameType.DATA);
    try std.testing.expectEqual(b.header.flags,Flags.initValue(Flags.NONE));
-   try std.testing.expectEqualStrings( b.payload.data.data.items, "Hello World from Zig!");
+   try std.testing.expectEqualStrings( b.payload.data.data.?.items, "Hello World from Zig!");
    try std.testing.expectEqual(b.payload.data.padding,null);
    var b2 = try framer.decodeFrames(alloc,s.reader().any(),&decoder_table);
    defer b2.deinit();
    try std.testing.expectEqual(b2.header.stream_id,1);
    try std.testing.expectEqual(b2.header.typ.typ,frame.H2FrameType.DATA);
    try std.testing.expectEqual(b2.header.flags,Flags.initValue(Flags.END_STREAM|Flags.PADDED));
-   try std.testing.expectEqualStrings( b2.payload.data.data.items, "Hello World from Zig!");
+   try std.testing.expectEqualStrings( b2.payload.data.data.?.items, "Hello World from Zig!");
    try std.testing.expectEqual(b2.payload.data.padding.?,10);
    var p = try framer.decodeFrames(alloc,s.reader().any(),&decoder_table);
    defer p.deinit();
@@ -835,7 +835,7 @@ test "frame encode decode test" {
    try std.testing.expectEqual(c.header.typ.typ,frame.H2FrameType.PUSH_PROMISE);
    try std.testing.expectEqual(c.header.flags,Flags.initValue(Flags.END_HEADERS));
    try std.testing.expectEqual(c.payload.push_promise.promised_stream_id,2);
-   try std.testing.expect(hpack.equalHeader(hdr,c.payload.push_promise.header));
+   try std.testing.expect(hpack.equalHeader(hdr,c.payload.push_promise.header.?));
    var r = try framer.decodeFrames(alloc,s.reader().any(),&decoder_table);
    defer r.deinit();
    try std.testing.expectEqual(r.header.stream_id,1);
@@ -849,5 +849,5 @@ test "frame encode decode test" {
    try std.testing.expectEqual(g.header.flags,Flags.init());
    try std.testing.expectEqual(g.payload.goaway.last_stream_id,1);
    try std.testing.expectEqual(g.payload.goaway.error_code,0);
-   try std.testing.expectEqual(g.payload.goaway.debug_data.items.len,0);
+   try std.testing.expectEqual(g.payload.goaway.debug_data.?.items.len,0);
 }
