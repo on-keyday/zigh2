@@ -43,6 +43,10 @@ jobs:
              for i in {1..10}; do 
                 echo "Iteration $i"
                 ./zig-out/bin/zigh2 && sleep 1
+                if [ $? -ne 0 ]; then
+                    echo "Failed on iteration $i"
+                    exit 1
+                fi
              done
       - name: Cat
         run: |
