@@ -39,4 +39,7 @@ jobs:
       - name: Build and Run
         run: |
              zig build && ./zig-out/bin/zigh2
-        
+      - name: Cat
+        run: |
+             cat ./test.html
+
