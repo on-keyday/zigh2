@@ -6,7 +6,7 @@
             "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceRoot}/zig-out/bin/zigh2.exe",
-            "args": [],
+            "args": ["shiguredo.jp"],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
             "environment": [
