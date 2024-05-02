@@ -96,7 +96,6 @@ pub fn main() !void {
             if(len2.? == 0) {
                 break;
             }
-            //std.debug.print("{s}",.{buf[0..len2.?]});
             try out.writeAll(buf[0..len2.?]);
         }
     }
