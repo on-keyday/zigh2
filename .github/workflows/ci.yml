@@ -38,4 +38,4 @@ jobs:
              zig test ./src/frame.zig
       - name: Build and Run and Show
         run: |
-            ./run_iteration.sh
+            . ./run_iteration.sh
