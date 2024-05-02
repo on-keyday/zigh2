@@ -58,14 +58,13 @@ pub fn main() !void {
     try tlsClient.writeAll(&netStream,request.readableSlice(0));
     var peerHeader :?hpack.Header = null;
     defer if(peerHeader) |*d| d.deinit();
-    const  out = try std.fs.cwd().createFile("test.html",.{});
-    defer out.close();
+    const out = try std.io.getStdOut();
     while(true) {
         const request2 = h2client.getSendBuffer();
         defer request2.deinit();
         if(request2.readableLength() > 0) {
             tlsClient.writeAll(&netStream,request2.readableSlice(0)) catch |e| {
-                std.debug.print("writeAll error: {}\n",.{e});
+                std.log.debug("writeAll error: {}\n",.{e});
                 break;
             };
             if(h2client.goawayCode) |_| {
