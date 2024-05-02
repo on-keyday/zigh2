@@ -104,6 +104,10 @@ pub fn decodeFrameHeader(self: Self,enc :std.io.AnyReader) anyerror!FrameHeader 
     }
     hdr.stream_id = @intCast( valID);
     if(self.local_max_frame_size < hdr.length) {
+        std.debug.print("loca_max_frame_size: {}, hdr.length: {}\n",.{
+            self.local_max_frame_size,
+            hdr.length,
+        });
         return FrameError.TooLongFrameSize;
     }
     return hdr;
