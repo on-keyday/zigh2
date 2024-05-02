@@ -12,11 +12,11 @@ pub fn is_none(f:Self)  bool {
 }
 
 pub fn is_ack(f:Self)  bool {
-    return f.value == ACK;
+    return f.value & ACK != 0;
 }
 
 pub fn is_end_stream(f:Self)  bool {
-    return f.value == END_STREAM;
+    return f.value & END_STREAM != 0;
 }
 
 pub fn is_padded(f:Self)  bool {
@@ -61,4 +61,45 @@ pub fn init()  Self {
 }
 pub fn initValue(value:u8)  Self {
     return Self { .value = value };
+}
+
+const std = @import("std");
+
+pub fn format(self :Self, comptime f :[]const u8, _ :std.fmt.FormatOptions, w :anytype) !void {
+    var need_partiacal_bar = false;
+    if(f.len >= 1 and f[0] == 'a') {
+        if(self.is_ack()) {
+            try w.writeAll("ACK");
+            need_partiacal_bar = true;
+        }
+    } else {
+        if(self.is_end_stream()) {
+            try w.writeAll("END_STREAM");
+            need_partiacal_bar = true;
+        }
+    }
+    if(self.is_padded()) {
+        if(need_partiacal_bar) {
+            try w.writeAll("|");
+        }
+        try w.writeAll("PADDED");
+        need_partiacal_bar = true;
+    }
+    if(self.is_end_headers()) {
+        if(need_partiacal_bar) {
+            try w.writeAll("|");
+        }
+        try w.writeAll("END_HEADERS");
+        need_partiacal_bar = true;
+    }
+    if(self.is_priority()) {
+        if(need_partiacal_bar) {
+            try w.writeAll("|");
+        }
+        try w.writeAll("PRIORITY");
+        need_partiacal_bar = true;
+    }
+    if(!need_partiacal_bar) {
+        try w.writeAll("NONE");
+    }
 }

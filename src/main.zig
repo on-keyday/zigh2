@@ -8,6 +8,10 @@ const Flags = @import("Flags.zig");
 const connection = @import("connection.zig");
 const TLSClient = @import("tls/Client.zig");
 
+const std_options :std.Options = .{
+    .log_level = std.log.Level.debug,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
@@ -67,7 +71,7 @@ pub fn main() !void {
             if(len2.? == 0) {
                 break;
             }
-            std.debug.print("{s}",.{buf[0..len2.?]});
+            //std.debug.print("{s}",.{buf[0..len2.?]});
             try out.writeAll(buf[0..len2.?]);
         }
     }

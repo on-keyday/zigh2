@@ -229,19 +229,31 @@ pub fn StreamConfig(comptime mutexTy :type) type {
             }
             try self.conn.framer.encodeHeaders(alloc,self.conn.sendWriter(),self.id,eos,hdr,&self.conn.encodeTable,null,null);
             if(self.state == State.IDLE) {
+                std.log.debug("stream {} State.IDLE -> State.OPEN\n",.{
+                    self.id,
+                });
                 // idle or reserved (local) - send H -> open
                 self.state = State.OPEN;
             }
             if(self.state == State.RESERVED_LOCAL) {
+                std.log.debug("stream {} State.RESERVED_LOCAL -> State.HALF_CLOSED_LOCAL\n",.{
+                    self.id,
+                });
                 // reserved (local) - send H -> half-closed (remote)
                 self.state = State.HALF_CLSOED_REMOTE;
             }
             if(eos) {
                 if(self.state == State.OPEN) {
+                    std.log.debug("stream {} State.OPEN -> State.HALF_CLOSED_LOCAL\n",.{
+                        self.id,
+                    });
                     // open - send ES -> half-closed (local)
                     self.state = State.HALF_CLOSED_LOCAL;
                 }
                 else if(self.state == State.HALF_CLSOED_REMOTE) {
+                    std.log.debug("stream {} State.HALF_CLSOED_REMOTE -> State.CLOSED\n",.{
+                        self.id,
+                    });
                     // half-closed (remote) - send ES -> closed
                     self.state = State.CLOSED;
                 }
@@ -279,6 +291,10 @@ pub fn StreamConfig(comptime mutexTy :type) type {
                 return;
             }
             try self.conn.framer.encodeRstStream(self.conn.sendWriter(),self.id,code);
+            std.log.debug("stream {} {} -> State.CLOSED\n",.{
+                self.id,
+                self.state,
+            });
             self.state = State.CLOSED;
         }
 
@@ -324,10 +340,16 @@ pub fn StreamConfig(comptime mutexTy :type) type {
                     try self.recv_buffer.writer().any().writeAll(d.data.?.items);
                     if(f.header.flags.is_end_stream()) {
                         if(self.state == State.OPEN) {
+                            std.log.debug("stream {} State.OPEN -> State.HALF_CLSOED_REMOTE\n",.{
+                                self.id,
+                            });
                             // open - recv ES -> half-closed (remote)
                             self.state = State.HALF_CLSOED_REMOTE;
                         }
                         else if(self.state == State.HALF_CLOSED_LOCAL) {
+                            std.log.debug("stream {} State.HALF_CLOSED_LOCAL -> State.CLOSED\n",.{
+                                self.id,
+                            });
                             // half-closed (local) - recv ES -> closed
                             self.state = State.CLOSED;
                         }
@@ -344,31 +366,45 @@ pub fn StreamConfig(comptime mutexTy :type) type {
                     try self.headers.writeItem(RecvHeader{.from =frame.H2FrameType.HEADERS,.header =  h.header.?});
                     h.header = null; // for deinit safety    
                     if(self.state == State.IDLE ) {
+                        std.log.debug("stream {} State.IDLE -> State.OPEN\n",.{
+                            self.id,
+                        });
                         // idle or reserved (remote) - recv H -> open
                         self.state = State.OPEN;
                     }
                     if(self.state == State.RESERVED_REMOTE) {
+                        std.log.debug("stream {} State.RESERVED_REMOTE -> State.HALF_CLOSED_LOCAL\n",.{
+                            self.id,
+                        });
                         // reserved (remote) - recv H -> half-closed (local)
                         self.state = State.HALF_CLOSED_LOCAL;
                     }
                     if(f.header.flags.is_end_stream()) {
                         if(self.state == State.OPEN) {
+                            std.log.debug("stream {} State.OPEN -> State.HALF_CLOSED_LOCAL\n",.{
+                                self.id,
+                            });
                             // open - recv ES -> half-closed (remote)
                             self.state = State.HALF_CLSOED_REMOTE;
                         }
                         else if(self.state == State.HALF_CLOSED_LOCAL) {
+                            std.log.debug("stream {} State.HALF_CLOSED_LOCAL -> State.CLOSED\n",.{
+                                self.id,
+                            });
                             // half-closed (local) - recv ES -> closed
                             self.state = State.CLOSED;
                         }
                     }
                 },
                 .push_promise => |*p| {
-
                     if(self.state != State.IDLE) {
                         return StreamError.InvalidState;
                     }
                     try self.headers.writeItem(RecvHeader{.from =frame.H2FrameType.PUSH_PROMISE,.header =  p.header.?});
                     p.header = null; // for deinit safety
+                    std.log.debug("stream {} State.IDLE -> State.RESERVED_REMOTE\n",.{
+                        self.id,
+                    });
                     self.state = State.RESERVED_REMOTE;
                 },
                 .priority => {
@@ -376,6 +412,10 @@ pub fn StreamConfig(comptime mutexTy :type) type {
                 },
                 .rst_stream => |r| {
                     self.err_code = r.error_code;
+                    std.log.debug("stream {} {} -> State.CLOSED\n",.{
+                        self.id,
+                        self.state,
+                    });
                     self.state = State.CLOSED;
                 },
                 .opaque_data => {}, // not known frame, ignore

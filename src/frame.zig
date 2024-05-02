@@ -59,10 +59,18 @@ const FrameHeader = struct {
                 .unknown_type => return null,
             }
         }
+
+        pub fn knownType(self :@This()) bool {
+            return self.getType() != null;
+        }
     },
     flags: Flags,
     stream_id: ID,
 };
+
+comptime {
+    std.debug.assert(std.meta.hasMethod(Flags,"format"));
+}
 
 fn encodeFrameHeader(frame :FrameHeader,enc :std.io.AnyWriter) anyerror!void{
     try enc.writeInt(u24, frame.length,.big);
@@ -72,6 +80,21 @@ fn encodeFrameHeader(frame :FrameHeader,enc :std.io.AnyWriter) anyerror!void{
     }));
     try enc.writeByte(@as(u8,frame.flags.value));
     try enc.writeInt(u32, @as(u32,frame.stream_id),.big);
+    if(frame.typ.knownType() and (frame.typ.typ == H2FrameType.SETTINGS or frame.typ.typ == H2FrameType.PING)) {
+        std.log.debug("send frame: frame length: {}, type: {?}, flags: {a}, stream_id: {}\n",.{
+            frame.length,
+            frame.typ,
+            frame.flags,
+            frame.stream_id,
+        });
+    } else {
+        std.log.debug("send frame: frame length: {}, type: {?}, flags: {}, stream_id: {}\n",.{
+            frame.length,
+            frame.typ,
+            frame.flags,
+            frame.stream_id,
+        });
+    }    
 }
 
 fn intToType(t :u8) ?H2FrameType {
@@ -103,8 +126,23 @@ pub fn decodeFrameHeader(self: Self,enc :std.io.AnyReader) anyerror!FrameHeader 
         return FrameError.InvalidStreamIDReservedBit;
     }
     hdr.stream_id = @intCast( valID);
+    if(hdr.typ.knownType() and (hdr.typ.typ == H2FrameType.SETTINGS or hdr.typ.typ == H2FrameType.PING)) {
+        std.log.debug("recv frame: frame length: {}, type: {?}, flags: {a}, stream_id: {}\n",.{
+            hdr.length,
+            hdr.typ,
+            hdr.flags,
+            hdr.stream_id,
+        });
+    } else {
+        std.log.debug("recv frame: frame length: {}, type: {?}, flags: {}, stream_id: {}\n",.{
+            hdr.length,
+            hdr.typ,
+            hdr.flags,
+            hdr.stream_id,
+        });
+    }   
     if(self.local_max_frame_size < hdr.length) {
-        std.debug.print("loca_max_frame_size: {}, hdr.length: {}\n",.{
+        std.log.debug("loca_max_frame_size: {}, hdr.length: {}\n",.{
             self.local_max_frame_size,
             hdr.length,
         });
