@@ -40,7 +40,10 @@ jobs:
         run: |
              zig build
              # run below command 10 times with sleep 1 second per iteration
-             for i in {1..10}; do ./zig-out/bin/zigh2 && sleep 1; done
+             for i in {1..10}; do 
+                echo "Iteration $i"
+                ./zig-out/bin/zigh2 && sleep 1
+             done
       - name: Cat
         run: |
              cat ./test.html

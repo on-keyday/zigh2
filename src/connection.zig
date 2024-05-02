@@ -642,7 +642,14 @@ pub fn Connection(comptime mutexTy :type) type {
                     // ignore, nothing can do
                 };
                 var tmpr = std.io.fixedBufferStream(&raw_header);
-                const header = try self.framer.decodeFrameHeader(tmpr.reader().any());
+                const header = self.framer.decodeFrameHeader(tmpr.reader().any()) catch |err| {
+                    std.log.debug("raw_header: {any} remaining_len: {} remaining_data: {any}\n",.{
+                        raw_header,
+                        self.recvBuffer.readableLength(),
+                        self.recvBuffer.readableSlice(0),
+                    });
+                    return err;
+                };
                 if(self.recvBuffer.readableLength() < header.length) {
                     break :READ_LOOP; // currently, no enough data
                 }
